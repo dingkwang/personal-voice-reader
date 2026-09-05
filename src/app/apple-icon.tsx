@@ -1,0 +1,17 @@
+import { ImageResponse } from "next/og";
+
+export const size = { width: 180, height: 180 };
+export const contentType = "image/png";
+
+export default function AppleIcon() {
+  return new ImageResponse(
+    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#1e654b" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        {[34, 68, 49, 25].map((height, index) => (
+          <div key={index} style={{ width: 8, height, borderRadius: 8, background: "#fffdfa" }} />
+        ))}
+      </div>
+    </div>,
+    size,
+  );
+}
