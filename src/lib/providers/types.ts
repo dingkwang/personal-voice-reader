@@ -7,7 +7,7 @@ export type SynthesisInput = {
 
 export type CloneVoiceInput = {
   name: string;
-  audio: File;
+  audio: File[];
   transcript?: string;
 };
 

@@ -8,10 +8,10 @@ import type {
 const FISH_API_ROOT = "https://api.fish.audio";
 
 function apiKey(): string {
-  const key = process.env.FISH_API_KEY;
+  const key = process.env.FISH_API_KEY || process.env.FISH_AUDIO_API_KEY;
   if (!key) {
     throw new AppError(
-      "尚未配置 FISH_API_KEY，请先在 .env.local 中添加 Fish Audio API key",
+      "尚未配置 FISH_API_KEY，请先在环境文件中添加 Fish Audio API key",
       503,
       "PROVIDER_NOT_CONFIGURED",
     );
@@ -77,7 +77,9 @@ export class FishVoiceProvider implements VoiceProviderAdapter {
     body.append("visibility", "private");
     body.append("enhance_audio_quality", "true");
     body.append("generate_sample", "false");
-    body.append("voices", input.audio, input.audio.name || "voice-recording.webm");
+    for (const audio of input.audio) {
+      body.append("voices", audio, audio.name || "voice-recording");
+    }
     if (input.transcript) body.append("texts", input.transcript);
 
     const response = await fetch(`${FISH_API_ROOT}/model`, {

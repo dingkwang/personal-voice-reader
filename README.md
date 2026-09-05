@@ -22,7 +22,7 @@
 
 ```bash
 cp .env.example .env.local
-# 编辑 .env.local，填入 FISH_API_KEY
+# 编辑 .env.local，填入 FISH_API_KEY（也兼容 FISH_AUDIO_API_KEY）
 npm install
 npm run dev
 ```
@@ -30,6 +30,18 @@ npm run dev
 打开 <http://localhost:3000>。首次运行会在 `.data/` 创建本地 JSON 数据和 MP3 缓存；该目录已加入 `.gitignore`。
 
 如果已有 Fish voice model，可填写 `FISH_DEFAULT_VOICE_ID`，也可以在界面右上角添加。没有 reference ID 时，默认项会使用 Fish 当前模型的默认声音。
+
+## Clone 我的声音
+
+1. 打开首页，点击右上角 `+` 或声音选择器里的“添加”。
+2. 用手机录制 30–60 秒，或上传 2–3 段各 15–20 秒的录音。
+3. 勾选声音所有权/授权确认，然后点击“保存声音”。
+4. Backend 会以 multipart 请求调用 Fish `POST /model`，使用 `type=tts`、`train_mode=fast` 和 `visibility=private`。
+5. Fish 返回的 `_id` 会保存为通用 Voice 的 `providerVoiceId`；此后 TTS 自动把它作为 `reference_id` 使用。
+
+录音至少应有 10 秒。安静房间、单人讲话、稳定音量和自然停顿最重要；不要带背景音乐或其他人的声音。上传多段录音时，服务端会把每段都作为一个 `voices` 字段发送，当前最多接受 20 段。
+
+浏览器麦克风需要安全上下文：电脑上的 `http://localhost:3000` 可以录音；iPhone 通过局域网 IP 访问时请使用 HTTPS 部署或 HTTPS tunnel。也可以先用手机录音 App 录好，再从页面上传音频文件。
 
 ## API
 

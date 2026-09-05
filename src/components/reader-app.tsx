@@ -488,14 +488,16 @@ export function ReaderApp() {
 function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (voice: Voice) => void }) {
   const [name, setName] = useState("");
   const [providerVoiceId, setProviderVoiceId] = useState("");
-  const [audio, setAudio] = useState<File | null>(null);
+  const [audio, setAudio] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef(0);
 
   async function toggleRecording() {
     if (recording) {
@@ -513,11 +515,26 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
         if (event.data.size) chunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        setAudio(new File([blob], "mobile-recording.webm", { type: blob.type }));
+        const seconds = (Date.now() - recordingStartedAtRef.current) / 1000;
+        if (seconds < 10) {
+          setAudio([]);
+          setError("录音至少需要 10 秒；30–60 秒通常会更自然");
+          streamRef.current?.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        const mime = recorder.mimeType || "audio/webm";
+        const extension = mime.includes("mp4")
+          ? "m4a"
+          : mime.includes("ogg")
+            ? "ogg"
+            : "webm";
+        const blob = new Blob(chunksRef.current, { type: mime });
+        setAudio([new File([blob], `mobile-recording.${extension}`, { type: mime })]);
         streamRef.current?.getTracks().forEach((track) => track.stop());
       };
       recorder.start();
+      recordingStartedAtRef.current = Date.now();
+      setRecordingSeconds(0);
       setRecording(true);
       setError("");
     } catch {
@@ -527,19 +544,27 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
 
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
+  useEffect(() => {
+    if (!recording) return;
+    const timer = window.setInterval(() => {
+      setRecordingSeconds(Math.floor((Date.now() - recordingStartedAtRef.current) / 1000));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [recording]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return setError("请给声音起一个名字");
-    if (!audio && !providerVoiceId.trim()) return setError("请录音、上传音频，或填写已有 Fish Voice ID");
-    if (audio && !consent) return setError("请确认你拥有并获准克隆这个声音");
+    if (!audio.length && !providerVoiceId.trim()) return setError("请录音、上传音频，或填写已有 Fish Voice ID");
+    if (audio.length && !consent) return setError("请确认你拥有并获准克隆这个声音");
     setSaving(true);
     setError("");
     try {
       let result: { voice: Voice };
-      if (audio) {
+      if (audio.length) {
         const form = new FormData();
         form.append("name", name.trim());
-        form.append("audio", audio);
+        for (const file of audio) form.append("audio", file);
         form.append("language", "zh");
         form.append("consent", String(consent));
         result = await api<{ voice: Voice }>("/api/voices", { method: "POST", body: form });
@@ -564,7 +589,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
         <button className="modal-close" onClick={onClose} aria-label="关闭"><CloseIcon /></button>
         <p className="eyebrow">创建专属声音</p>
         <h2 id="voice-title">添加一个声音</h2>
-        <p className="modal-lead">录制 30–60 秒清晰人声，Fish 会创建一个私密、可重复使用的 Voice ID。</p>
+        <p className="modal-lead">录制 30–60 秒清晰人声，或上传 2–3 段短录音。Fish 会创建一个私密、可重复使用的 Voice ID。</p>
         <form onSubmit={submit}>
           <label className="form-label">声音名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：我的声音" maxLength={60} /></label>
           <div className={`record-zone ${recording ? "recording" : ""}`}>
@@ -572,14 +597,14 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
               <MicIcon size={24} />
             </button>
             <div>
-              <strong>{recording ? "正在录音，点击结束" : audio ? "录音已经准备好" : "用手机录一段"}</strong>
-              <span>{audio ? `${audio.name} · ${(audio.size / 1024 / 1024).toFixed(1)} MB` : "安静环境下自然说话 30–60 秒"}</span>
+              <strong>{recording ? `正在录音 ${recordingSeconds} 秒，点击结束` : audio.length ? "录音已经准备好" : "用手机录一段"}</strong>
+              <span>{audio.length ? `${audio.length} 段 · ${(audio.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024).toFixed(1)} MB` : "安静环境下自然说话 30–60 秒"}</span>
             </div>
-            <label className="file-pill">上传<input type="file" accept="audio/*" onChange={(event) => setAudio(event.target.files?.[0] || null)} /></label>
+            <label className="file-pill">上传<input type="file" accept="audio/*" multiple onChange={(event) => setAudio(Array.from(event.target.files || []).slice(0, 20))} /></label>
           </div>
           <div className="or-divider"><span>或者连接已有声音</span></div>
-          <label className="form-label">Fish Voice ID<input value={providerVoiceId} onChange={(event) => setProviderVoiceId(event.target.value)} placeholder="例如 98abc…" disabled={Boolean(audio)} /></label>
-          {audio && <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>我确认这是我的声音，或我已获得声音所有者的明确授权。</span></label>}
+          <label className="form-label">Fish Voice ID<input value={providerVoiceId} onChange={(event) => setProviderVoiceId(event.target.value)} placeholder="例如 98abc…" disabled={Boolean(audio.length)} /></label>
+          {Boolean(audio.length) && <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>我确认这是我的声音，或我已获得声音所有者的明确授权。</span></label>}
           {error && <p className="form-error">{error}</p>}
           <button className="modal-submit" disabled={saving || recording}>{saving ? <><span className="spinner light" />正在创建…</> : "保存声音"}</button>
         </form>
