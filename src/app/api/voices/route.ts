@@ -16,7 +16,12 @@ const linkedVoiceSchema = z.object({
 
 export async function GET() {
   try {
-    return Response.json({ voices: (await readStore()).voices });
+    const voices = (await readStore()).voices.toSorted((a, b) => {
+      if (a.source === "default" && b.source !== "default") return 1;
+      if (a.source !== "default" && b.source === "default") return -1;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+    return Response.json({ voices });
   } catch (error) {
     return errorResponse(error);
   }
