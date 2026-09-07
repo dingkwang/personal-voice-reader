@@ -36,6 +36,10 @@ yarn-error.log*
 
 # local MVP persistence
 /.data/
+/.backups/
+/.evidence/
+/.workflow-data/
+/.test-data/
 
 # vercel
 .vercel
@@ -43,3 +47,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+/.swc

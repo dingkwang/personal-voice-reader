@@ -20,18 +20,10 @@ function apiKey(): string {
 }
 
 async function fishError(response: Response): Promise<AppError> {
-  let detail = "";
-  try {
-    const data = (await response.json()) as { message?: string; detail?: string };
-    detail = data.message || data.detail || "";
-  } catch {
-    detail = await response.text().catch(() => "");
-  }
-
-  const suffix = detail ? `：${detail}` : "";
+  await response.body?.cancel();
   return new AppError(
-    `Fish Audio 请求失败 (${response.status})${suffix}`,
-    response.status === 401 ? 502 : response.status,
+    `Fish Audio 请求失败 (${response.status})`,
+    502,
     "FISH_API_ERROR",
   );
 }

@@ -43,6 +43,8 @@ export function chunkText(
     .trim();
 
   if (!normalized) return [];
+  const paragraphs = normalized.split(/\n\s*\n/);
+  if (paragraphs.length > 1) return paragraphs.flatMap((paragraph) => chunkText(paragraph, { targetLength, maxLength }));
 
   const units = (normalized.match(SENTENCE_PATTERN) ?? [normalized])
     .map((part) => part.trim())

@@ -29,7 +29,7 @@ describe("chunkText", () => {
 
   it("normalizes BOM, CRLF, and repeated whitespace", () => {
     expect(chunkText("\uFEFF你好。\r\n\r\n\r\n   世界。"))
-      .toEqual(["你好。世界。"]) ;
+      .toEqual(["你好。", "世界。"]) ;
   });
 });
 

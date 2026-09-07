@@ -1,47 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { z } from "zod";
-import { chunkText, inferTitle } from "@/lib/chunker";
-import { AppError, errorResponse } from "@/lib/errors";
-import { addDocument } from "@/lib/store";
-import { toPublicDocument, type ReaderDocument } from "@/lib/types";
-
+import { requireOwner } from "@/lib/auth";
+import { errorResponse } from "@/lib/errors";
+import { documentSchema, makeDocument } from "@/lib/documents";
+import { addDocument, listDocuments } from "@/lib/store";
+import { toDocumentSummary, toPublicDocument } from "@/lib/types";
 export const runtime = "nodejs";
-
-const documentSchema = z.object({
-  title: z.string().trim().max(100).optional(),
-  text: z.string().trim().min(1).max(100_000),
-});
-
+export async function GET() {
+  try {
+    const owner = await requireOwner();
+    return Response.json({ documents: (await listDocuments(owner)).map(toDocumentSummary) }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) { return errorResponse(error); }
+}
 export async function POST(request: Request) {
   try {
+    const owner = await requireOwner(request);
     const parsed = documentSchema.parse(await request.json());
-    const chunks = chunkText(parsed.text);
-    if (!chunks.length) throw new AppError("没有找到可朗读的文字");
-
-    const documentId = `doc_${randomUUID()}`;
-    const document: ReaderDocument = {
-      id: documentId,
-      title: parsed.title || inferTitle(parsed.text),
-      originalText: parsed.text,
-      createdAt: new Date().toISOString(),
-      segments: chunks.map((text, index) => ({
-        id: `seg_${randomUUID()}`,
-        documentId,
-        index,
-        text,
-        status: "idle",
-        audioHash: null,
-        audioUrl: null,
-        voiceId: null,
-        speed: null,
-      })),
-    };
-
-    return Response.json(
-      { document: toPublicDocument(await addDocument(document)) },
-      { status: 201 },
-    );
-  } catch (error) {
-    return errorResponse(error);
-  }
+    return Response.json({ document: toPublicDocument(await addDocument(makeDocument(parsed), owner)) }, { status: 201, headers: { "Cache-Control": "no-store" } });
+  } catch (error) { return errorResponse(error); }
 }

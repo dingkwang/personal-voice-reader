@@ -8,23 +8,51 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "data:backup": "node scripts/backup.mjs",
+    "data:import": "tsx scripts/import-legacy.ts",
+    "deploy:check": "tsx scripts/deploy-check.ts",
+    "test:browser": "playwright test"
   },
   "dependencies": {
+    "@auth0/nextjs-auth0": "^4.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@vercel/blob": "^2.8.0",
+    "jose": "^6.2.12",
     "next": "16.3.4",
+    "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "workflow": "^4.8.5",
     "zod": "^4.5.4"
   },
+  "overrides": {
+    "@workflow/core": {
+      "nanoid": "^5.1.16"
+    },
+    "@workflow/world-local": {
+      "undici": "^7.29.0"
+    },
+    "@workflow/world-vercel": {
+      "undici": "^7.29.0"
+    }
+  },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5",
+    "undici": "^7.29.1",
     "vitest": "^3.2.4"
   }
 }

@@ -1,11 +1,9 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
-  type ChangeEvent,
   type FormEvent,
 } from "react";
 import {
@@ -19,21 +17,8 @@ import {
   PlusIcon,
   UploadIcon,
 } from "@/components/icons";
-import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
-import type { PublicDocument, Segment, Voice } from "@/lib/types";
-
-const SAMPLE_TEXT = `把一篇长文章变成声音，不应该是一段漫长的等待。
-
-粘贴文字，选择熟悉的声音，然后按下播放。第一段生成后会立刻开始朗读，后面的段落在你聆听时悄悄准备好。你可以暂停、继续，也可以随时跳到上一段或下一段。
-
-这是一个很小的开始，但它已经拥有成为个人声音平台所需的骨架。`;
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const data = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(data.error || "请求失败，请稍后重试");
-  return data;
-}
+import { api, useReader } from "@/components/use-reader";
+import type { Voice } from "@/lib/types";
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -41,251 +26,18 @@ function formatTime(seconds: number) {
   return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
 }
 
-export function ReaderApp() {
-  const [text, setText] = useState(SAMPLE_TEXT);
-  const [title, setTitle] = useState("");
-  const [voices, setVoices] = useState<Voice[]>([]);
-  const [voiceId, setVoiceId] = useState("");
-  const [speed, setSpeed] = useState(1);
-  const [document, setDocument] = useState<PublicDocument | null>(null);
-  const [documentSource, setDocumentSource] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isPreparing, setIsPreparing] = useState(false);
-  const [time, setTime] = useState({ current: 0, duration: 0 });
-  const [message, setMessage] = useState("");
+export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
+  const {
+    text, title, document, history, historyLoading, historyError, refreshHistory,
+    loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
+    voices, voiceId, speed, changeSettings, addVoice, voiceError,
+    activeIndex, isPlaying, isPreparing, time, message, setMessage,
+    changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
+    job, retryFailed,
+  } = useReader(initialSessionId);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const documentRef = useRef<PublicDocument | null>(null);
-  const activeIndexRef = useRef(0);
-  const inFlightRef = useRef(new Map<string, Promise<Segment>>());
-  const currentSignatureRef = useRef("");
-
-  useEffect(() => {
-    documentRef.current = document;
-  }, [document]);
-
-  useEffect(() => {
-    activeIndexRef.current = activeIndex;
-  }, [activeIndex]);
-
-  useEffect(() => {
-    if (!currentSignatureRef.current) return;
-    audioRef.current?.pause();
-    currentSignatureRef.current = "";
-    setTime({ current: 0, duration: 0 });
-  }, [speed, voiceId]);
-
-  useEffect(() => {
-    api<{ voices: Voice[] }>("/api/voices")
-      .then(({ voices: items }) => {
-        setVoices(items);
-        setVoiceId((current) => current || items[0]?.id || "");
-      })
-      .catch((error: Error) => setMessage(error.message));
-  }, []);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !("mediaSession" in navigator)) return;
-
-    navigator.mediaSession.setActionHandler("play", () => void audio.play());
-    navigator.mediaSession.setActionHandler("pause", () => audio.pause());
-    navigator.mediaSession.setActionHandler("previoustrack", () => {
-      window.dispatchEvent(new CustomEvent("reader:previous"));
-    });
-    navigator.mediaSession.setActionHandler("nexttrack", () => {
-      window.dispatchEvent(new CustomEvent("reader:next"));
-    });
-
-    return () => {
-      for (const action of ["play", "pause", "previoustrack", "nexttrack"] as const) {
-        navigator.mediaSession.setActionHandler(action, null);
-      }
-    };
-  }, []);
-
-  const updateSegment = useCallback((next: Segment) => {
-    setDocument((current) => {
-      if (!current) return current;
-      const updated = {
-        ...current,
-        segments: current.segments.map((segment) =>
-          segment.id === next.id ? next : segment,
-        ),
-      };
-      documentRef.current = updated;
-      return updated;
-    });
-  }, []);
-
-  const ensureAudio = useCallback(
-    async (segment: Segment): Promise<Segment> => {
-      const signature = `${segment.id}:${voiceId}:${speed}`;
-      if (
-        segment.audioUrl &&
-        segment.voiceId === voiceId &&
-        segment.speed === speed
-      ) {
-        return segment;
-      }
-      const pending = inFlightRef.current.get(signature);
-      if (pending) return pending;
-
-      const generation = api<{ segment: Segment }>("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ segmentId: segment.id, voiceId, speed }),
-      }).then(({ segment: next }) => {
-        updateSegment(next);
-        return next;
-      });
-      inFlightRef.current.set(signature, generation);
-      try {
-        return await generation;
-      } finally {
-        inFlightRef.current.delete(signature);
-      }
-    },
-    [speed, updateSegment, voiceId],
-  );
-
-  const loadSegment = useCallback(
-    async (index: number, autoplay = true) => {
-      const currentDocument = documentRef.current;
-      const audio = audioRef.current;
-      const segment = currentDocument?.segments[index];
-      if (!currentDocument || !audio || !segment) return;
-
-      setIsPreparing(true);
-      setMessage("");
-      setActiveIndex(index);
-      activeIndexRef.current = index;
-      try {
-        const ready = await ensureAudio(segment);
-        const signature = `${ready.id}:${voiceId}:${speed}`;
-        if (currentSignatureRef.current !== signature) {
-          audio.src = ready.audioUrl!;
-          audio.load();
-          currentSignatureRef.current = signature;
-          setTime({ current: 0, duration: 0 });
-        }
-        if ("mediaSession" in navigator) {
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: currentDocument.title,
-            artist: voices.find((voice) => voice.id === voiceId)?.name || "Personal Voice",
-            album: `第 ${index + 1} / ${currentDocument.segments.length} 段`,
-          });
-        }
-        if (autoplay) {
-          await audio.play();
-          setIsPlaying(true);
-        }
-
-        for (const next of currentDocument.segments.slice(index + 1, index + 3)) {
-          void ensureAudio(next).catch(() => undefined);
-        }
-      } catch (error) {
-        setIsPlaying(false);
-        setMessage(error instanceof Error ? error.message : "无法生成音频");
-      } finally {
-        setIsPreparing(false);
-      }
-    },
-    [ensureAudio, speed, voiceId, voices],
-  );
-
-  const createDocument = useCallback(async () => {
-    const result = await api<{ document: PublicDocument }>("/api/documents", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, title: title || undefined }),
-    });
-    setDocument(result.document);
-    documentRef.current = result.document;
-    setDocumentSource(text);
-    setActiveIndex(0);
-    activeIndexRef.current = 0;
-    currentSignatureRef.current = "";
-    return result.document;
-  }, [text, title]);
-
-  const togglePlayback = useCallback(async () => {
-    const audio = audioRef.current;
-    if (!audio || !voiceId) {
-      setMessage("请先选择一个声音");
-      return;
-    }
-    if (!text.trim()) {
-      setMessage("先粘贴一些文字，或上传 TXT 文件");
-      return;
-    }
-    if (isPlaying) {
-      audio.pause();
-      return;
-    }
-
-    setMessage("");
-    try {
-      let currentDocument = documentRef.current;
-      if (!currentDocument || documentSource !== text) {
-        setIsPreparing(true);
-        currentDocument = await createDocument();
-      }
-      const segment = currentDocument.segments[activeIndexRef.current];
-      const signature = `${segment.id}:${voiceId}:${speed}`;
-      if (audio.src && currentSignatureRef.current === signature) {
-        await audio.play();
-        setIsPlaying(true);
-      } else {
-        await loadSegment(activeIndexRef.current, true);
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "暂时无法开始朗读");
-      setIsPreparing(false);
-    }
-  }, [createDocument, documentSource, isPlaying, loadSegment, speed, text, voiceId]);
-
-  const goPrevious = useCallback(() => {
-    if (!documentRef.current) return;
-    void loadSegment(Math.max(0, activeIndexRef.current - 1), true);
-  }, [loadSegment]);
-
-  const goNext = useCallback(() => {
-    const count = documentRef.current?.segments.length || 0;
-    if (!count) return;
-    void loadSegment(Math.min(count - 1, activeIndexRef.current + 1), true);
-  }, [loadSegment]);
-
-  useEffect(() => {
-    window.addEventListener("reader:previous", goPrevious);
-    window.addEventListener("reader:next", goNext);
-    return () => {
-      window.removeEventListener("reader:previous", goPrevious);
-      window.removeEventListener("reader:next", goNext);
-    };
-  }, [goNext, goPrevious]);
-
-  function handleFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".txt") && file.type !== "text/plain") {
-      setMessage("V0 目前只支持 TXT 文件");
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      setMessage("TXT 文件请控制在 2 MB 以内");
-      return;
-    }
-    file.text().then((content) => {
-      setText(content.replace(/^\uFEFF/, ""));
-      setTitle(file.name.replace(/\.txt$/i, ""));
-      setMessage("");
-    });
-    event.target.value = "";
-  }
+  const editorDisabled = isSaving || Boolean(loadingId);
+  const queueDisabled = editorDisabled || isDirty;
 
   const progress = document
     ? ((activeIndex + (time.duration ? time.current / time.duration : 0)) /
@@ -295,24 +47,6 @@ export function ReaderApp() {
 
   return (
     <div className="app-shell">
-      <ServiceWorkerRegistration />
-      <audio
-        ref={audioRef}
-        preload="auto"
-        onEnded={() => {
-          const count = documentRef.current?.segments.length || 0;
-          if (activeIndexRef.current < count - 1) goNext();
-          else setIsPlaying(false);
-        }}
-        onPause={() => setIsPlaying(false)}
-        onPlay={() => setIsPlaying(true)}
-        onLoadedMetadata={(event) =>
-          setTime({ current: event.currentTarget.currentTime, duration: event.currentTarget.duration })
-        }
-        onTimeUpdate={(event) =>
-          setTime({ current: event.currentTarget.currentTime, duration: event.currentTarget.duration })
-        }
-      />
 
       <header className="site-header">
         <a className="brand" href="#top" aria-label="声笺首页">
@@ -323,19 +57,59 @@ export function ReaderApp() {
           <small>VOICE NOTE</small>
         </a>
         <div className="header-actions">
-          <span className="private-chip"><span /> 私密处理</span>
+          <span className="private-chip"><span /> Dingkang · 私人会话</span>
+          {/* Full navigation disposes private playback state and runs Auth0 logout. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+          <a href="/auth/logout" className="text-button">退出</a>
           <button className="round-button" onClick={() => setShowVoiceModal(true)} aria-label="添加声音">
             <PlusIcon />
           </button>
         </div>
       </header>
 
-      <main id="top" className="workspace">
+      <div id="top" className="session-layout">
+        <aside className="history-panel" aria-label="历史会话">
+          <div className="history-heading">
+            <h2>历史会话 <span>{history.length}</span></h2>
+            <button className="text-button" onClick={() => void refreshHistory()} disabled={historyLoading}>刷新</button>
+          </div>
+          <button className="new-session-button" onClick={newSession} disabled={isSaving}><PlusIcon size={18} />新建会话</button>
+          <p className="history-caption">私人云端保存，随时回来继续听。</p>
+          {historyLoading && <p className="history-status" role="status">正在加载会话列表…</p>}
+          {historyError && <div className="history-status" role="alert">{historyError}<button className="text-button" onClick={() => void refreshHistory()}>重试列表</button></div>}
+          {!historyLoading && !historyError && !history.length && <p className="history-status">还没有会话。粘贴文字后点击「保存会话」，留待下次朗读。</p>}
+          <ul className="history-list">
+            {history.map((item) => (
+              <li key={item.id}>
+                <button
+                  className={`history-item ${(loadingId || document?.id) === item.id ? "active" : ""}`}
+                  aria-current={(loadingId || document?.id) === item.id ? "true" : undefined}
+                  disabled={isSaving}
+                  onClick={() => void selectSession(item.id)}
+                >
+                  <strong>{item.title}</strong>
+                  <span className="history-meta"><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time> · {item.characterCount.toLocaleString()} 字</span>
+                  <span className="history-preview">{item.preview}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      <main className="workspace" aria-label="会话编辑器">
         <section className="intro">
           <p className="eyebrow">把文字，交给熟悉的声音</p>
           <h1>随身听见，<em>每一篇好文章。</em></h1>
-          <p className="intro-copy">粘贴文字或上传 TXT。第一段准备好就开始播放，其余内容会在聆听中接续生成。</p>
+          <p className="intro-copy">保存一篇文章，留住一段声音。从历史会话选一篇，或新建会话开始。</p>
         </section>
+
+        <div className="session-toolbar">
+          <span role="status">{loadingId ? "正在打开会话…" : isSaving ? "正在保存会话…" : isDirty ? "未保存的修改" : document ? "会话已保存" : "新会话"}</span>
+          <button className="save-session-button" onClick={() => void saveDocument()} disabled={editorDisabled || !text.trim() || (Boolean(document) && !isDirty)}>
+            {isSaving ? <span className="spinner" /> : <CheckIcon size={16} />}保存会话
+          </button>
+          <p>保存不生成语音；朗读会自动保存。修改文字或标题后会另存新会话，原会话保留。</p>
+        </div>
+        {detailError && <div className="notice" role="alert">{detailError.message}<button className="detail-retry" onClick={() => void selectSession(detailError.id)}>重试打开</button></div>}
 
         <section className="composer-card">
           <div className="composer-topline">
@@ -344,18 +118,25 @@ export function ReaderApp() {
               aria-label="文章标题"
               placeholder="文章标题（可选）"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              maxLength={100}
+              disabled={editorDisabled}
+              onChange={(event) => changeDraft({ text, title: event.target.value })}
             />
             <label className="upload-button">
               <UploadIcon size={18} />
               <span>上传 TXT</span>
-              <input type="file" accept=".txt,text/plain" onChange={handleFile} />
+              <input type="file" accept=".txt,text/plain" aria-label="上传 TXT" disabled={editorDisabled} onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importFile(file);
+                event.target.value = "";
+              }} />
             </label>
           </div>
           <textarea
             aria-label="要朗读的文字"
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            disabled={editorDisabled}
+            onChange={(event) => changeDraft({ text: event.target.value, title })}
             placeholder="在这里粘贴你想听的文字……"
             spellCheck={false}
           />
@@ -370,7 +151,9 @@ export function ReaderApp() {
             <label htmlFor="voice">朗读声音</label>
             <div className="select-row">
               <div className="voice-avatar" aria-hidden="true"><span /><span /><span /></div>
-              <select id="voice" value={voiceId} onChange={(event) => setVoiceId(event.target.value)}>
+              <select id="voice" value={voiceId} onChange={(event) => changeSettings({ voiceId: event.target.value, speed })}>
+                {!voiceId && <option value="">请选择声音</option>}
+                {voiceId && !voices.some((voice) => voice.id === voiceId) && <option value={voiceId}>已保存的声音（暂不可用）</option>}
                 {voices.map((voice) => <option value={voice.id} key={voice.id}>{voice.name}</option>)}
               </select>
               <button className="add-voice-inline" onClick={() => setShowVoiceModal(true)}>
@@ -379,33 +162,42 @@ export function ReaderApp() {
             </div>
           </div>
           <div className="control-field speed-field">
-            <div className="field-label-row"><label htmlFor="speed">语速</label><strong>{speed.toFixed(1)}×</strong></div>
+            <div className="field-label-row"><label htmlFor="speed">语速</label><strong>{speed}×</strong></div>
             <input
               id="speed"
               type="range"
               min="0.7"
               max="1.5"
-              step="0.1"
+              step="0.05"
               value={speed}
-              onChange={(event) => setSpeed(Number(event.target.value))}
+              onChange={(event) => changeSettings({ voiceId, speed: Number(event.target.value) })}
               style={{ "--range-progress": `${((speed - 0.7) / 0.8) * 100}%` } as React.CSSProperties}
             />
             <div className="range-labels"><span>舒缓</span><span>自然</span><span>快速</span></div>
           </div>
-          <button className="primary-read-button" onClick={() => void togglePlayback()} disabled={isPreparing && !document}>
+          <button className="primary-read-button" onClick={() => void togglePlayback()} disabled={editorDisabled || isPreparing || !text.trim()}>
             {isPreparing ? <span className="spinner" /> : isPlaying ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
-            {isPreparing ? "正在准备第一段…" : isPlaying ? "暂停朗读" : "开始朗读"}
+            {isPreparing ? "正在准备音频…" : isPlaying ? "暂停朗读" : "开始朗读"}
           </button>
           <p className="cost-note"><CheckIcon size={14} /> 相同文字和设置会自动使用缓存</p>
         </section>
 
+        {voiceError && <div className="notice" role="alert">{voiceError}</div>}
+        {job && <div className={`notice job-progress ${job.items.some((item) => ["error", "uncertain"].includes(item.status)) ? "needs-attention" : ""}`} role="status">
+          <div>
+            <p>{job.status === "completed" ? "音频已就绪" : job.status === "attention" ? "部分段落需要处理" : "后台生成中，可以关闭页面，稍后回来继续听"} · {job.items.filter((item) => item.status === "ready").length}/{job.items.length}</p>
+            {job.items.filter((item) => ["error", "uncertain"].includes(item.status)).map((item) => (
+              <p key={item.segment_id}>{item.error} <button className="text-button" onClick={() => void retryFailed(item.segment_id)}>重试第 {job.items.indexOf(item) + 1} 段</button></p>
+            ))}
+          </div>
+        </div>}
         {message && <div className="notice" role="alert"><span>!</span>{message}<button onClick={() => setMessage("")} aria-label="关闭"><CloseIcon size={16} /></button></div>}
 
         {document && (
           <section className="reading-card" aria-label="播放队列">
             <div className="reading-heading">
               <div>
-                <p className="eyebrow">正在朗读</p>
+                <p className="eyebrow">{isDirty ? "原会话段落 · 保存后更新" : "朗读段落"}</p>
                 <h2>{document.title}</h2>
               </div>
               <span>{activeIndex + 1} / {document.segments.length} 段</span>
@@ -415,7 +207,8 @@ export function ReaderApp() {
                 <button
                   key={segment.id}
                   className={`segment ${index === activeIndex ? "active" : ""}`}
-                  onClick={() => void loadSegment(index, true)}
+                  disabled={queueDisabled}
+                  onClick={() => void loadSegment(index)}
                 >
                   <span className="segment-number">{String(index + 1).padStart(2, "0")}</span>
                   <span>{segment.text}</span>
@@ -426,6 +219,7 @@ export function ReaderApp() {
           </section>
         )}
       </main>
+      </div>
 
       {document && (
         <aside className="player-bar" aria-label="播放器">
@@ -436,11 +230,11 @@ export function ReaderApp() {
               <div><strong>{document.title}</strong><span>{isPreparing ? "正在生成音频…" : `第 ${activeIndex + 1} 段 · ${voices.find((voice) => voice.id === voiceId)?.name || "声音"}`}</span></div>
             </div>
             <div className="transport">
-              <button onClick={goPrevious} aria-label="上一段" disabled={activeIndex === 0}><BackIcon /></button>
-              <button className="transport-main" onClick={() => void togglePlayback()} aria-label={isPlaying ? "暂停" : "播放"}>
+              <button onClick={goPrevious} aria-label="上一段" disabled={queueDisabled || activeIndex === 0}><BackIcon /></button>
+              <button className="transport-main" onClick={() => void togglePlayback()} disabled={editorDisabled || isPreparing || !text.trim()} aria-label={isPlaying ? "暂停" : "播放"}>
                 {isPreparing ? <span className="spinner light" /> : isPlaying ? <PauseIcon /> : <PlayIcon />}
               </button>
-              <button onClick={goNext} aria-label="下一段" disabled={activeIndex === document.segments.length - 1}><ForwardIcon /></button>
+              <button onClick={goNext} aria-label="下一段" disabled={queueDisabled || activeIndex === document.segments.length - 1}><ForwardIcon /></button>
             </div>
             <div className="time-control">
               <span>{formatTime(time.current)}</span>
@@ -451,19 +245,8 @@ export function ReaderApp() {
                 max={time.duration || 0}
                 step="0.1"
                 value={time.current}
-                onMouseDown={() => setIsDragging(true)}
-                onMouseUp={() => setIsDragging(false)}
-                onTouchStart={() => setIsDragging(true)}
-                onTouchEnd={() => setIsDragging(false)}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setTime((current) => ({ ...current, current: next }));
-                  if (audioRef.current && !isDragging) audioRef.current.currentTime = next;
-                }}
-                onPointerUp={(event) => {
-                  if (audioRef.current) audioRef.current.currentTime = Number(event.currentTarget.value);
-                  setIsDragging(false);
-                }}
+                disabled={queueDisabled || !time.duration}
+                onChange={(event) => seek(Number(event.target.value))}
               />
               <span>{formatTime(time.duration)}</span>
             </div>
@@ -475,8 +258,7 @@ export function ReaderApp() {
         <VoiceModal
           onClose={() => setShowVoiceModal(false)}
           onCreated={(voice) => {
-            setVoices((current) => [...current, voice]);
-            setVoiceId(voice.id);
+            addVoice(voice);
             setShowVoiceModal(false);
           }}
         />
@@ -498,6 +280,10 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef(0);
+  const mountedRef = useRef(true);
+  const cloneRequestRef = useRef<{ signature: string; input: {
+    name: string; language: string; consent: boolean; uploadIds: string[]; idempotencyKey: string;
+  } } | null>(null);
 
   async function toggleRecording() {
     if (recording) {
@@ -507,6 +293,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
       chunksRef.current = [];
       const recorder = new MediaRecorder(stream);
@@ -542,7 +329,14 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
     }
   }
 
-  useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (recorderRef.current) recorderRef.current.onstop = recorderRef.current.ondataavailable = null;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
 
   useEffect(() => {
     if (!recording) return;
@@ -562,12 +356,25 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
     try {
       let result: { voice: Voice };
       if (audio.length) {
-        const form = new FormData();
-        form.append("name", name.trim());
-        for (const file of audio) form.append("audio", file);
-        form.append("language", "zh");
-        form.append("consent", String(consent));
-        result = await api<{ voice: Voice }>("/api/voices", { method: "POST", body: form });
+        const signature = JSON.stringify([name.trim(), audio.map((file) => [file.name, file.size, file.lastModified, file.type])]);
+        if (cloneRequestRef.current?.signature !== signature) {
+          const { upload } = await import("@vercel/blob/client");
+          const uploadIds: string[] = [];
+          for (const file of audio) {
+            const reservation = await api<{ id: string; pathname: string }>("/api/uploads", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ size: file.size, contentType: file.type.split(";")[0] }),
+            });
+            await upload(reservation.pathname, file, { access: "private", handleUploadUrl: "/api/uploads",
+              clientPayload: reservation.id, contentType: file.type.split(";")[0], multipart: true });
+            uploadIds.push(reservation.id);
+          }
+          cloneRequestRef.current = { signature, input: { name: name.trim(), language: "zh", consent, uploadIds, idempotencyKey: crypto.randomUUID() } };
+        }
+        result = await api<{ voice: Voice }>("/api/voices", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cloneRequestRef.current.input),
+        });
       } else {
         result = await api<{ voice: Voice }>("/api/voices", {
           method: "POST",
@@ -575,11 +382,11 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
           body: JSON.stringify({ name: name.trim(), provider: "fish", providerVoiceId: providerVoiceId.trim(), language: "zh" }),
         });
       }
-      onCreated(result.voice);
+      if (mountedRef.current) onCreated(result.voice);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "添加声音失败");
+      if (mountedRef.current) setError(caught instanceof Error ? caught.message : "添加声音失败");
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   }
 

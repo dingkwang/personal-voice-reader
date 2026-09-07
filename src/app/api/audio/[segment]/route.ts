@@ -1,67 +1,24 @@
-import { readFile, stat } from "node:fs/promises";
-import { errorResponse } from "@/lib/errors";
-import { findSegment, getAudioPath } from "@/lib/store";
-
+import { requireOwner } from "@/lib/auth";
+import { AppError, errorResponse } from "@/lib/errors";
+import { database } from "@/lib/db";
+import { findSegment } from "@/lib/store";
+import { streamAudio } from "@/lib/blob";
 export const runtime = "nodejs";
-
-export async function GET(
-  request: Request,
-  context: RouteContext<"/api/audio/[segment]">,
-) {
+export async function GET(request: Request, context: { params: Promise<{ segment: string }> }) {
   try {
-    const { segment: segmentId } = await context.params;
-    const { segment } = await findSegment(segmentId);
-    if (!segment.audioHash) {
-      return Response.json(
-        { error: "这个段落的音频尚未生成", code: "AUDIO_NOT_READY" },
-        { status: 404 },
-      );
-    }
-
-    const filePath = getAudioPath(segment.audioHash);
-    const fileSize = (await stat(filePath)).size;
-    const range = request.headers.get("range");
-    const commonHeaders = {
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Content-Type": "audio/mpeg",
-      ETag: `"${segment.audioHash}"`,
-    };
-
-    if (range) {
-      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-      if (!match) return new Response(null, { status: 416 });
-      const isSuffix = !match[1] && Boolean(match[2]);
-      const suffixLength = isSuffix ? Math.min(Number(match[2]), fileSize) : 0;
-      const start = isSuffix ? fileSize - suffixLength : Number(match[1] || 0);
-      const end = isSuffix
-        ? fileSize - 1
-        : match[2]
-          ? Math.min(Number(match[2]), fileSize - 1)
-          : fileSize - 1;
-      if (start > end || start >= fileSize) {
-        return new Response(null, {
-          status: 416,
-          headers: { "Content-Range": `bytes */${fileSize}` },
-        });
-      }
-      const fullAudio = await readFile(filePath);
-      const chunk = fullAudio.subarray(start, end + 1);
-      return new Response(chunk, {
-        status: 206,
-        headers: {
-          ...commonHeaders,
-          "Content-Length": String(chunk.length),
-          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-        },
-      });
-    }
-
-    const audio = await readFile(filePath);
-    return new Response(audio, {
-      headers: { ...commonHeaders, "Content-Length": String(fileSize) },
-    });
-  } catch (error) {
-    return errorResponse(error);
-  }
+    const owner = await requireOwner();
+    const { segment: id } = await context.params;
+    const { segment } = await findSegment(id, owner);
+    const version = new URL(request.url).searchParams.get("v");
+    if (version && !/^(?:[a-f0-9]{12}|[a-f0-9]{64})$/.test(version)) throw new AppError("找不到这个版本的音频", 404);
+    const key = version || segment.audioHash;
+    if (!key) throw new AppError("音频尚未生成", 404, "AUDIO_NOT_READY");
+    const { rows } = await database().query<{ pathname: string; size: number; object_hash: string }>(
+      `SELECT c.pathname,c.size,c.object_hash FROM audio_cache c
+       WHERE c.owner=$1 AND c.key LIKE $2 AND
+       (c.legacy OR EXISTS(SELECT 1 FROM audio_versions v WHERE v.owner=c.owner AND v.key=c.key AND v.segment_id=$3))`,
+      [owner, `${key}%`, id]);
+    if (rows.length !== 1) throw new AppError("找不到这个版本的音频", 404, "AUDIO_VERSION_NOT_FOUND");
+    return await streamAudio(request, rows[0]);
+  } catch (error) { return errorResponse(error); }
 }

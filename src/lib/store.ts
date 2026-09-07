@@ -1,115 +1,70 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { AppError } from "@/lib/errors";
-import type { ReaderDocument, StoreData, Voice } from "@/lib/types";
+import { AppError } from "./errors";
+import { ownerSubject } from "./config";
+import { database, ownerLock, type Database } from "./db";
+import type { ReaderDocument, Segment, StoreData, Voice } from "./types";
 
-const dataRoot = process.env.VOICE_READER_DATA_DIR
-  ? path.resolve(process.env.VOICE_READER_DATA_DIR)
-  : path.join(process.cwd(), ".data");
-const audioRoot = path.join(dataRoot, "audio");
-const storePath = path.join(dataRoot, "store.json");
-
-let mutationQueue: Promise<unknown> = Promise.resolve();
-
-function defaultVoice(): Voice {
-  return {
-    id: "voice_fish_default",
-    name: process.env.FISH_DEFAULT_VOICE_NAME || "Fish 默认声音",
-    provider: "fish",
-    providerVoiceId: process.env.FISH_DEFAULT_VOICE_ID || null,
-    language: "zh",
-    createdAt: new Date().toISOString(),
-    source: process.env.FISH_DEFAULT_VOICE_ID ? "linked" : "default",
-  };
+export async function listVoices(owner = ownerSubject(), db = database()): Promise<Voice[]> {
+  const { rows } = await db.query<{ data: Voice }>("SELECT data FROM voices WHERE owner=$1", [owner]);
+  return rows.map((r) => r.data).sort((a, b) =>
+    Number(b.id === process.env.DEFAULT_VOICE_ID) - Number(a.id === process.env.DEFAULT_VOICE_ID) ||
+    Number(b.name === "Dingkang 的声音") - Number(a.name === "Dingkang 的声音") ||
+    Number(a.source === "default") - Number(b.source === "default") || b.createdAt.localeCompare(a.createdAt));
 }
-
-async function ensureStore(): Promise<void> {
-  await mkdir(audioRoot, { recursive: true });
-  try {
-    await stat(storePath);
-  } catch {
-    const initial: StoreData = {
-      voices: [defaultVoice()],
-      documents: [],
-      audioCache: {},
-    };
-    await writeFile(storePath, JSON.stringify(initial, null, 2), "utf8");
-  }
+export async function findVoice(id: string, owner = ownerSubject(), db = database()): Promise<Voice> {
+  const { rows } = await db.query<{ data: Voice }>("SELECT data FROM voices WHERE owner=$1 AND id=$2", [owner, id]);
+  if (!rows[0]) throw new AppError("找不到这个声音", 404, "VOICE_NOT_FOUND");
+  return rows[0].data;
 }
-
-export async function readStore(): Promise<StoreData> {
-  await ensureStore();
-  return JSON.parse(await readFile(storePath, "utf8")) as StoreData;
-}
-
-export async function mutateStore<T>(
-  update: (data: StoreData) => T | Promise<T>,
-): Promise<T> {
-  const operation = mutationQueue.then(async () => {
-    const data = await readStore();
-    const result = await update(data);
-    const tempPath = `${storePath}.${randomUUID()}.tmp`;
-    await writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
-    await rename(tempPath, storePath);
-    return result;
-  });
-
-  mutationQueue = operation.catch(() => undefined);
-  return operation;
-}
-
-export async function findVoice(id: string): Promise<Voice> {
-  const voice = (await readStore()).voices.find((item) => item.id === id);
-  if (!voice) throw new AppError("找不到这个声音", 404, "VOICE_NOT_FOUND");
+export async function addVoice(voice: Voice, owner = ownerSubject(), db = database()) {
+  await db.query("INSERT INTO voices(owner,id,data) VALUES ($1,$2,$3)", [owner, voice.id, voice]);
   return voice;
 }
-
-export async function findSegment(segmentId: string) {
-  for (const document of (await readStore()).documents) {
-    const segment = document.segments.find((item) => item.id === segmentId);
-    if (segment) return { document, segment };
-  }
-  throw new AppError("找不到这个朗读段落", 404, "SEGMENT_NOT_FOUND");
+export async function findDocument(id: string, owner = ownerSubject(), db = database()): Promise<ReaderDocument> {
+  const [{ rows }, segments] = await Promise.all([
+    db.query<{ data: Omit<ReaderDocument, "segments"> }>("SELECT data FROM documents WHERE owner=$1 AND id=$2", [owner, id]),
+    db.query<{ data: Segment }>("SELECT data FROM segments WHERE owner=$1 AND document_id=$2 ORDER BY position", [owner, id]),
+  ]);
+  if (!rows[0]) throw new AppError("找不到这篇文章", 404, "DOCUMENT_NOT_FOUND");
+  return { ...rows[0].data, segments: segments.rows.map((s) => s.data) };
 }
-
-export async function addVoice(voice: Voice): Promise<Voice> {
-  return mutateStore((data) => {
-    data.voices.push(voice);
-    return voice;
+export async function findSegment(id: string, owner = ownerSubject(), db = database()) {
+  const { rows } = await db.query<{ data: Segment }>("SELECT data FROM segments WHERE owner=$1 AND id=$2", [owner, id]);
+  if (!rows[0]) throw new AppError("找不到这个朗读段落", 404, "SEGMENT_NOT_FOUND");
+  return { segment: rows[0].data };
+}
+export async function listDocuments(owner = ownerSubject()): Promise<ReaderDocument[]> {
+  const db = database();
+  const [{ rows }, segments] = await Promise.all([
+    db.query<{ data: Omit<ReaderDocument, "segments"> }>("SELECT data FROM documents WHERE owner=$1 ORDER BY created_at DESC", [owner]),
+    db.query<{ data: Segment }>("SELECT data FROM segments WHERE owner=$1 ORDER BY position", [owner]),
+  ]);
+  const byDoc = new Map<string, Segment[]>();
+  for (const { data } of segments.rows) {
+    const items = byDoc.get(data.documentId) || [];
+    items.push(data);
+    byDoc.set(data.documentId, items);
+  }
+  return rows.map(({ data }) => ({ ...data, segments: byDoc.get(data.id) || [] }));
+}
+export async function insertDocument(document: ReaderDocument, owner: string, db: Database) {
+  const { segments, ...data } = document;
+  await db.query("INSERT INTO documents(owner,id,data,created_at) VALUES($1,$2,$3,$4)", [owner, data.id, data, data.createdAt]);
+  for (const segment of segments) {
+    await db.query("INSERT INTO segments(owner,id,document_id,position,data) VALUES($1,$2,$3,$4,$5)", [owner, segment.id, data.id, segment.index, segment]);
+  }
+  return document;
+}
+export async function addDocument(document: ReaderDocument, owner = ownerSubject()) {
+  return database().transaction(async (db) => {
+    await ownerLock(db, owner);
+    return insertDocument(document, owner, db);
   });
 }
-
-export async function addDocument(
-  document: ReaderDocument,
-): Promise<ReaderDocument> {
-  return mutateStore((data) => {
-    data.documents.unshift(document);
-    data.documents = data.documents.slice(0, 100);
-    return document;
-  });
-}
-
-export function getAudioPath(hash: string): string {
-  if (!/^[a-f0-9]{64}$/.test(hash)) {
-    throw new AppError("无效的音频标识", 400, "INVALID_AUDIO_HASH");
-  }
-  return path.join(audioRoot, `${hash}.mp3`);
-}
-
-export async function persistAudio(hash: string, audio: ArrayBuffer) {
-  await ensureStore();
-  const finalPath = getAudioPath(hash);
-  const tempPath = `${finalPath}.${randomUUID()}.tmp`;
-  await writeFile(tempPath, Buffer.from(audio));
-  await rename(tempPath, finalPath);
-}
-
-export async function audioExists(hash: string): Promise<boolean> {
-  try {
-    await stat(getAudioPath(hash));
-    return true;
-  } catch {
-    return false;
-  }
+// Read-only compatibility for export/migration diagnostics, not a mutation API.
+export async function readStore(owner = ownerSubject()): Promise<StoreData> {
+  const [voices, documents, cache] = await Promise.all([
+    listVoices(owner), listDocuments(owner),
+    database().query<{ key: string }>("SELECT key FROM audio_cache WHERE owner=$1", [owner]),
+  ]);
+  return { voices, documents, audioCache: Object.fromEntries(cache.rows.map(({ key }) => [key, key])) };
 }
