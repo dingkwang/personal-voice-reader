@@ -32,6 +32,18 @@ network.get("https://synthetic.private.blob.vercel-storage.com").intercept({ pat
 setGlobalDispatcher(network);
 globalThis.fetch = async function(input, init) {
   const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.hostname === "api.replicate.com") {
+    if (new Headers(init?.headers).get("Authorization") !== "Bearer synthetic-replicate") return new Response(null, { status: 401 });
+    if (init?.method === "POST") {
+      const id = `synthetic${indexRequests.size}`;
+      indexRequests.set(id, Date.now());
+      await appendFile(process.env.BROWSER_TEST_LOG, "mock-replicate-start\n");
+      return Response.json({ id, status: "starting" });
+    }
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({ id, status: Date.now() - indexRequests.get(id) > 5500 ? "succeeded" : "processing", output: "https://replicate.delivery/synthetic.mp3" });
+  }
+  if (url.hostname === "replicate.delivery") return new Response(mp3, { headers: { "Content-Type": "audio/mpeg" } });
   if (url.hostname === "synthetic.modal.run") {
     const headers = new Headers(init?.headers);
     if (headers.get("Modal-Key") !== "synthetic-key" || headers.get("Modal-Secret") !== "synthetic-secret") return new Response(null, { status: 401 });

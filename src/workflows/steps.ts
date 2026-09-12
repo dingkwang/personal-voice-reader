@@ -1,6 +1,7 @@
 import { claimNext, completeGeneration, uncertainGeneration, pendingGeneration, failedGeneration } from "@/lib/jobs";
 import { AppError } from "@/lib/errors";
 import { IndexTtsProvider } from "@/lib/providers/indextts";
+import { ReplicateProvider } from "@/lib/providers/replicate";
 import { getVoiceProvider } from "@/lib/providers";
 import { putAudio } from "@/lib/blob";
 import { ownerSubject, validateResourceIdentity } from "@/lib/config";
@@ -11,9 +12,9 @@ export async function generateNext(jobId: string, owner: string): Promise<"busy"
   await validateResourceIdentity();
   const claim = await claimNext(jobId, owner);
   if (typeof claim === "string") return claim;
-  if (claim.job.synthesis?.provider === "indextts") {
+  if (["indextts", "replicate"].includes(claim.job.synthesis?.provider || "")) {
     try {
-      const result = await new IndexTtsProvider().poll(claim);
+      const result = await (claim.job.synthesis?.provider === "replicate" ? new ReplicateProvider() : new IndexTtsProvider()).poll(claim);
       if (result.status === "ready") {
         await completeGeneration(claim, await putAudio(owner, result.audio));
       } else if (result.status === "error") await failedGeneration(claim);

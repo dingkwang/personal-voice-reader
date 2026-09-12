@@ -12,7 +12,7 @@ async function main() {
     Object.assign(process.env, parseEnv(await readFile(file, "utf8")));
   }
   loadCloudEnv();
-  const sql = (await Promise.all(["001_cloud.sql", "002_indextts.sql"].map((file) => readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8")))).join("\n");
+  const sql = (await Promise.all(["001_cloud.sql", "002_indextts.sql", "003_replicate.sql"].map((file) => readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8")))).join("\n");
   await database().transaction(async (db) => {
     const tables = await db.query<{ tablename: string }>("SELECT tablename FROM pg_tables WHERE schemaname='public'");
     if (tables.rows.length && !tables.rows.some((t) => t.tablename === "deployment_identity")) throw new Error("Refusing nonempty unrelated database");
@@ -24,6 +24,6 @@ async function main() {
     await db.query("INSERT INTO deployment_identity(environment,project) VALUES($1,'personal-voice-reader') ON CONFLICT DO NOTHING", [required("APP_ENV")]);
     await db.query("INSERT INTO owners(id) VALUES($1) ON CONFLICT DO NOTHING", [ownerSubject()]);
   });
-  console.log("Schemas 001–002 verified; owner initialized. No personal data imported.");
+  console.log("Schemas 001–003 verified; owner initialized. No personal data imported.");
 }
 main().then(() => process.exit(0)).catch(() => { console.error("Migration blocked. Check target identity, environment, database access, and runbook prerequisites. No credentials logged."); process.exit(1); });

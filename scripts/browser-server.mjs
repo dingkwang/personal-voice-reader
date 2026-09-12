@@ -15,6 +15,7 @@ execFileSync("ffmpeg", ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequen
 const db = await PGlite.create();
 await db.exec(await readFile(path.join(root, "migrations/001_cloud.sql"), "utf8"));
 await db.exec(await readFile(path.join(root, "migrations/002_indextts.sql"), "utf8"));
+await db.exec(await readFile(path.join(root, "migrations/003_replicate.sql"), "utf8"));
 await db.query("INSERT INTO deployment_identity(environment,project) VALUES('development','personal-voice-reader')");
 await db.query("INSERT INTO owners(id) VALUES('auth0|synthetic-browser')");
 await db.query("INSERT INTO voices(owner,id,data) VALUES('auth0|synthetic-browser','voice_browser',$1)", [{
@@ -30,6 +31,11 @@ await db.query("INSERT INTO voices(owner,id,data) VALUES('auth0|synthetic-browse
   reference: { pathname: `references/${ownerHash}/${referenceHash}.wav`, hash: referenceHash, size: reference.length, seconds: 12 },
 }]);
 const socket = new PGLiteSocketServer({ db, host: "127.0.0.1", port: 0, maxConnections: 8 });
+await db.query("INSERT INTO voices(owner,id,data) VALUES('auth0|synthetic-browser','voice_replicate_browser',$1)", [{
+  id: "voice_replicate_browser", name: "Replicate 合成验收声音", provider: "replicate", providerVoiceId: referenceHash,
+  language: "zh", source: "cloned", createdAt: "2026-09-12T00:00:00Z",
+  reference: { pathname: `references/${ownerHash}/${referenceHash}.wav`, hash: referenceHash, size: reference.length, seconds: 12 },
+}]);
 await socket.start();
 const secret = randomBytes(32).toString("hex");
 await writeFile(path.join(evidence, "test-secret"), secret, { mode: 0o600 });
@@ -43,6 +49,7 @@ const server = spawn(process.execPath, ["--import", path.join(root, "scripts/bro
     AUTH0_SECRET: secret, AUTH0_OWNER_SUB: "auth0|synthetic-browser", AUTH0_AUDIENCE: "http://127.0.0.1:3108/api/mcp",
     AUTH0_MCP_CLIENT_ID: "synthetic-mcp", BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_synthetic_notreal",
     INDEXTTS_URL: "https://synthetic.modal.run", MODAL_PROXY_KEY: "synthetic-key", MODAL_PROXY_SECRET: "synthetic-secret",
+    REPLICATE_API_KEY: "synthetic-replicate",
     DEFAULT_VOICE_ID: "voice_browser", CRON_SECRET: "synthetic-cron", FISH_API_KEY: "synthetic-not-real",
     WORKFLOW_LOCAL_BASE_URL: "http://127.0.0.1:3108", WORKFLOW_LOCAL_DATA_DIR: path.join(evidence, "workflow"),
     BROWSER_TEST_AUDIO: audio, BROWSER_TEST_LOG: path.join(evidence, "provider-mock.log"),

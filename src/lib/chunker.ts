@@ -1,5 +1,6 @@
-const END_MARK = /[。！？!?；;：:]$/;
-const SENTENCE_PATTERN = /[^。！？!?；;：:\n]+[。！？!?；;：:]?|\n+/g;
+const END_MARK = /[。！？!?；;：:.]$/;
+// Keep decimal numbers intact while treating ordinary English full stops as ends.
+const SENTENCE_PATTERN = /[^。！？!?；;：:\n.]+(?:[。！？!?；;：:]|(?<!\d)\.(?!\d))?|\n+/g;
 
 export type ChunkOptions = {
   targetLength?: number;
@@ -29,7 +30,7 @@ function hardSplit(text: string, maxLength: number): string[] {
 
 export function chunkText(
   input: string,
-  { targetLength = 360, maxLength = 480 }: ChunkOptions = {},
+  { targetLength = 800, maxLength = 1200 }: ChunkOptions = {},
 ): string[] {
   if (targetLength < 1 || maxLength < targetLength) {
     throw new Error("Invalid chunk length configuration");
@@ -46,8 +47,10 @@ export function chunkText(
   const paragraphs = normalized.split(/\n\s*\n/);
   if (paragraphs.length > 1) return paragraphs.flatMap((paragraph) => chunkText(paragraph, { targetLength, maxLength }));
 
-  const units = (normalized.match(SENTENCE_PATTERN) ?? [normalized])
-    .map((part) => part.trim())
+  // Protect decimal points while using the same sentence scanner for English.
+  const protectedText = normalized.replace(/(\d)\.(\d)/g, "$1\uE000$2");
+  const units = (protectedText.match(SENTENCE_PATTERN) ?? [protectedText])
+    .map((part) => part.replace(/\uE000/g, ".").trim())
     .filter(Boolean)
     .flatMap((part) => hardSplit(part, maxLength));
 

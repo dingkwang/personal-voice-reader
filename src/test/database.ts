@@ -7,6 +7,7 @@ export async function testDatabase() {
   const pg = new PGlite();
   await pg.exec(await readFile(new URL("../../migrations/001_cloud.sql", import.meta.url), "utf8"));
   await pg.exec(await readFile(new URL("../../migrations/002_indextts.sql", import.meta.url), "utf8"));
+  await pg.exec(await readFile(new URL("../../migrations/003_replicate.sql", import.meta.url), "utf8"));
   const adapt = (engine: Pick<PGlite, "query">): Database => ({
     query: (sql, params) => engine.query(sql, params),
     transaction: (run) => pg.transaction((tx) => run(adapt(tx))),

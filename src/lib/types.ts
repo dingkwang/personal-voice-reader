@@ -1,4 +1,4 @@
-export type VoiceProvider = "fish" | "indextts" | "elevenlabs" | "minimax" | "local";
+export type VoiceProvider = "fish" | "indextts" | "replicate" | "elevenlabs" | "minimax" | "local";
 
 export type VoiceReference = { pathname: string; hash: string; size: number; seconds: number };
 export type SynthesisSettings = {

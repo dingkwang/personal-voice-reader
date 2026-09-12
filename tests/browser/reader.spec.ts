@@ -80,9 +80,9 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole("button", { name: "暂停", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.getByRole("button", { name: "下一段", exact: true }).click();
-    await expect(page.locator(".now-playing")).toContainText("第 2 段");
+    await expect(page.locator(".segment.active .segment-number")).toHaveText("02");
     await page.getByRole("button", { name: "上一段", exact: true }).click();
-    await expect(page.locator(".now-playing")).toContainText("第 1 段");
+    await expect(page.locator(".segment.active .segment-number")).toHaveText("01");
     const seek = page.locator(".time-control input");
     await expect(seek).toBeEnabled();
     await seek.fill("2");
@@ -217,23 +217,25 @@ test("closing a voice dialog isolates its late completion", async ({ page, conte
   await expect(page.getByRole("textbox", { name: "要朗读的文字" })).toHaveValue("保留新的合成草稿");
 });
 
-for (const width of [1440, 390]) {
-  test(`IndexTTS web default, async playback and Fish history at ${width}px`, async ({ page, context }) => {
+for (const [width, indexVoice] of [[1440, "voice_index_browser"], [390, "voice_index_browser"], [1440, "voice_replicate_browser"], [390, "voice_replicate_browser"]] as const) {
+  test(`IndexTTS ${indexVoice} web default, async playback and Fish history at ${width}px`, async ({ page, context }) => {
     await login(context);
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
     await page.goto("/");
     const old = await context.request.post("/api/documents", { headers: { Origin: base }, data: { text: `旧 Fish 兼容验收 ${width}`, title: `旧 Fish ${width}` } });
     const oldBody = await old.json();
-    const oldJob = await context.request.post("/api/tts", { headers: { Origin: base }, data: { documentId: oldBody.document.id, voiceId: "voice_browser", speed: 1, idempotencyKey: `index-old-${width}` } });
+    const oldJob = await context.request.post("/api/tts", { headers: { Origin: base }, data: { documentId: oldBody.document.id, voiceId: "voice_browser", speed: 1, idempotencyKey: `index-old-${indexVoice}-${width}` } });
+    expect(oldJob.status()).toBe(202);
     const oldJobId = (await oldJob.json()).job.id;
     await expect.poll(async () => (await (await context.request.get(`/api/jobs/${oldJobId}`)).json()).job.status, { timeout: 20000 }).toBe("completed");
     await page.reload();
     const voices = page.getByRole("combobox", { name: "朗读声音" });
-    await voices.selectOption("voice_index_browser");
+    await voices.selectOption(indexVoice);
     await page.getByRole("button", { name: "设为网页默认" }).click();
     await expect(page.getByRole("status").filter({ hasText: "已设为网页默认声音" })).toBeVisible();
     await page.reload();
-    await expect(voices).toHaveValue("voice_index_browser");
+    await expect(voices).toHaveValue(indexVoice);
+    if (indexVoice === "voice_replicate_browser") await expect(page.locator("#speed")).toBeDisabled();
     await page.getByRole("textbox", { name: "文章标题" }).fill(`Index 网页验收 ${width}`);
     await page.getByRole("textbox", { name: "要朗读的文字" }).fill(`IndexTTS 第${width}段合成验收。\n\n第二段是用于断线恢复的合成文字。\n\n第三段检查分段播放。`);
     await page.locator(".primary-read-button").click();
@@ -242,16 +244,16 @@ for (const width of [1440, 390]) {
     await page.goto("about:blank");
     await page.goto(url);
     await expect(page.getByRole("status").filter({ hasText: "音频已就绪" })).toBeVisible({ timeout: 65000 });
-    await expect(voices).toHaveValue("voice_index_browser");
+    await expect(voices).toHaveValue(indexVoice);
     await page.locator(".primary-read-button").click();
     await expect(page.getByRole("button", { name: "暂停", exact: true })).toBeVisible();
     await page.screenshot({ path: `.evidence/browser/${width}-indextts-playback.png`, fullPage: true });
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await voices.selectOption("voice_browser");
     await page.getByRole("button", { name: "新建会话", exact: true }).click();
-    await expect(voices).toHaveValue("voice_index_browser");
+    await expect(voices).toHaveValue(indexVoice);
     // Existing Fish sessions restore their saved voice, despite the new web default.
-    await page.locator(".history-item").filter({ hasText: `旧 Fish ${width}` }).click();
+    await page.locator(".history-item").filter({ hasText: `旧 Fish ${width}` }).first().click();
     await expect(voices).toHaveValue("voice_browser");
     await page.getByRole("button", { name: "设为网页默认" }).click();
     await expect(page.getByRole("status").filter({ hasText: "已设为网页默认声音" })).toBeVisible();

@@ -35,14 +35,15 @@ async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; ide
   return database().transaction(async (db) => {
     await ownerLock(db, owner);
     const voice = await findVoice(input.voiceId, owner, db);
+    if (voice.provider === "replicate" && input.speed !== 1) throw new AppError("IndexTTS 2 当前使用自然语速 1×", 422);
     const prior = await db.query<ReadingJob & { request_hash: string }>(
       "SELECT j.*,r.request_hash FROM job_requests r JOIN jobs j ON j.owner=r.owner AND j.id=r.job_id WHERE r.owner=$1 AND r.key=$2", [owner, input.idempotencyKey]);
     const synthesis = prior.rows[0]?.synthesis || synthesisSettings(voice);
     const model = prior.rows[0]?.model || synthesis.model;
-    const requestHash = sha256((synthesis.provider === "indextts" ? stableJson : JSON.stringify)({
+    const requestHash = sha256((["indextts", "replicate"].includes(synthesis.provider) ? stableJson : JSON.stringify)({
       document: "documentId" in input ? input.documentId : { text: input.text, title: input.title || "" },
       voiceId: input.voiceId, speed: input.speed, model,
-      ...(synthesis.provider === "indextts" ? { synthesis } : {}),
+      ...(["indextts", "replicate"].includes(synthesis.provider) ? { synthesis } : {}),
     }));
     if (prior.rows[0]) {
       if (prior.rows[0].request_hash !== requestHash) throw new AppError("幂等键已用于不同内容", 409, "IDEMPOTENCY_CONFLICT");
@@ -65,7 +66,7 @@ async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; ide
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [owner, id, document.id, input.idempotencyKey, requestHash, voice.id, input.speed, model, synthesis]);
     await db.query("INSERT INTO job_requests(owner,key,request_hash,job_id) VALUES($1,$2,$3,$4)", [owner, input.idempotencyKey, requestHash, id]);
     for (const segment of document.segments) {
-      const key = voice.provider === "indextts"
+      const key = ["indextts", "replicate"].includes(voice.provider)
         ? sha256(stableJson({ version: 2, synthesis, text: segment.text, speed: input.speed }))
         : audioKey({ provider: voice.provider, providerVoiceId: voice.providerVoiceId, text: segment.text, model, speed: input.speed });
       await db.query("INSERT INTO job_items(owner,job_id,segment_id,position,key) VALUES($1,$2,$3,$4,$5)", [owner, id, segment.id, segment.index, key]);
@@ -118,7 +119,7 @@ export async function claimNext(jobId: string, owner: string): Promise<Generatio
     const { rows } = await db.query<ReadingJob>("SELECT * FROM jobs WHERE owner=$1 AND id=$2", [owner, jobId]);
     if (!rows[0]) return "done";
     const job = rows[0];
-    if (job.synthesis?.provider === "indextts") {
+    if (["indextts", "replicate"].includes(job.synthesis?.provider || "")) {
       const resumed = await db.query<{ segment_id: string; key: string; attempt: string }>(`UPDATE generation_claims c SET poll_after=now()+interval '40 seconds'
         FROM job_items i WHERE c.owner=$1 AND c.job_id=$2 AND c.poll_after<=now() AND c.expires_at>now()
         AND i.owner=c.owner AND i.job_id=c.job_id AND i.segment_id=c.segment_id AND i.status='working'
@@ -144,7 +145,7 @@ export async function claimNext(jobId: string, owner: string): Promise<Generatio
       const attempt = randomUUID();
       const [{ segment }, voice] = await Promise.all([findSegment(item.segment_id, owner, db), findVoice(job.voice_id, owner, db)]);
       await db.query(`INSERT INTO generation_claims(owner,slot,key,job_id,segment_id,attempt,expires_at,poll_after)
-        VALUES($1,$2,$3,$4,$5,$6,now()+$7::interval,now()+interval '40 seconds')`, [owner, slot, item.key, jobId, segment.id, attempt, job.synthesis?.provider === "indextts" ? "30 minutes" : "10 minutes"]);
+        VALUES($1,$2,$3,$4,$5,$6,now()+$7::interval,now()+interval '40 seconds')`, [owner, slot, item.key, jobId, segment.id, attempt, ["indextts", "replicate"].includes(job.synthesis?.provider || "") ? "30 minutes" : "10 minutes"]);
       await db.query("UPDATE job_items SET status='working',attempt=$4 WHERE owner=$1 AND job_id=$2 AND segment_id=$3", [owner, jobId, segment.id, attempt]);
       await db.query("UPDATE jobs SET status='running',updated_at=now() WHERE owner=$1 AND id=$2", [owner, jobId]);
       return { attempt, key: item.key, segment, voice, job, owner };

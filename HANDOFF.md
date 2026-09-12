@@ -1,5 +1,14 @@
 # Implementation and cloud handoff, 2026-09-07
 
+## Replicate web preview — 2026-09-12
+
+The user selected Replicate IndexTTS 2 to ship within two hours. This supersedes
+the Modal rollout below. Schema 003 is applied to Preview. The supplied original
+recording was converted locally to a 20-second mono WAV and stored in private Blob.
+“我的声音” is the Preview web default. Replicate's token is a Preview Vercel Secret.
+The direct real-voice smoke test succeeded. Browser owner login and live webpage
+acceptance remain pending. See `docs/REPLICATE_PREVIEW.md` for setup and limits.
+
 ## IndexTTS-2.5 web preview — 2026-09-12
 
 The web reader now supports IndexTTS-2.5 through an on-demand Modal L4.

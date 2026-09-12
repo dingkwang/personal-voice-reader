@@ -7,14 +7,17 @@ export const ownerPrefix = (owner: string) => sha256(owner).slice(0, 32);
 
 export async function putAudio(owner: string, audio: ArrayBuffer) {
   const objectHash = sha256(new Uint8Array(audio));
-  const pathname = `audio/${ownerPrefix(owner)}/${objectHash}.mp3`;
+  const bytes = Buffer.from(audio);
+  const wav = bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE";
+  const contentType = wav ? "audio/wav" : "audio/mpeg";
+  const pathname = `audio/${ownerPrefix(owner)}/${objectHash}.${wav ? "wav" : "mp3"}`;
   try {
-    await put(pathname, audio, { access: "private", addRandomSuffix: false, allowOverwrite: false, contentType: "audio/mpeg" });
+    await put(pathname, audio, { access: "private", addRandomSuffix: false, allowOverwrite: false, contentType });
   } catch (error) {
     // Blob's "already exists" errors are not a dedicated SDK class. Confirm the
     // immutable object after any ambiguous PUT instead of overwriting it.
     const existing = await head(pathname).catch(() => null);
-    if (!existing || existing.size !== audio.byteLength || existing.contentType !== "audio/mpeg") throw error;
+    if (!existing || existing.size !== audio.byteLength || existing.contentType !== contentType) throw error;
   }
   return { objectHash, pathname, size: audio.byteLength };
 }
@@ -34,7 +37,7 @@ export async function streamAudio(request: Request, audio: { pathname: string; s
   const etag = `"${audio.object_hash}"`;
   const range = parseRange(!request.headers.has("if-range") || request.headers.get("if-range") === etag ? request.headers.get("range") : null, audio.size);
   const headers = new Headers({
-    "Accept-Ranges": "bytes", "Cache-Control": "private, no-store", "Content-Type": "audio/mpeg",
+    "Accept-Ranges": "bytes", "Cache-Control": "private, no-store", "Content-Type": audio.pathname.endsWith(".wav") ? "audio/wav" : "audio/mpeg",
     "X-Content-Type-Options": "nosniff", ETag: etag,
   });
   if (range === "invalid") {

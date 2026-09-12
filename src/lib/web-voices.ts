@@ -19,7 +19,7 @@ export async function webVoices(owner: string) {
 export async function setWebVoice(owner: string, voiceId: string) {
   const voice = await findVoice(voiceId, owner);
   providerReady(voice.provider);
-  if (voice.provider === "indextts" && !voice.reference) throw new AppError("请先上传参考录音", 422);
+  if (["indextts", "replicate"].includes(voice.provider) && !voice.reference) throw new AppError("请先上传参考录音", 422);
   await database().query(`INSERT INTO reader_preferences(owner,web_voice_id) VALUES($1,$2)
     ON CONFLICT(owner) DO UPDATE SET web_voice_id=excluded.web_voice_id`, [owner, voiceId]);
 }

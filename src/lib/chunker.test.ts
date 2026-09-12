@@ -31,6 +31,13 @@ describe("chunkText", () => {
     expect(chunkText("\uFEFF你好。\r\n\r\n\r\n   世界。"))
       .toEqual(["你好。", "世界。"]) ;
   });
+
+  it("uses longer defaults and keeps decimal points intact", () => {
+    const text = `${"这是较长的句子。".repeat(70)} Version 2.5 is stable. 下一句。`;
+    const chunks = chunkText(text);
+    expect(chunks.every((chunk) => chunk.length <= 1200)).toBe(true);
+    expect(chunks.join(" ")).toContain("2.5");
+  });
 });
 
 describe("inferTitle", () => {

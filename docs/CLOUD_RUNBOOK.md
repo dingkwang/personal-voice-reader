@@ -1,5 +1,11 @@
 # Voice Note cloud runbook
 
+## Current route: Replicate IndexTTS 2 — 2026-09-12
+
+Replicate replaces Modal for this Preview milestone. Schema 003, the private
+reference voice, and Preview-only `REPLICATE_API_KEY` are configured. See
+`REPLICATE_PREVIEW.md`. Historical Modal deployment instructions below are deferred.
+
 ## IndexTTS-2.5 web preview — 2026-09-12
 
 Schema 002 is applied to Preview. The Modal service code is ready under
