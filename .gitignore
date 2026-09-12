@@ -48,3 +48,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 /.swc
+
+# Python service artifacts
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc

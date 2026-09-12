@@ -1,13 +1,63 @@
 # Voice Note cloud runbook
 
+## IndexTTS-2.5 web preview — 2026-09-12
+
+Schema 002 is applied to Preview. The Modal service code is ready under
+`services/indextts`. Complete Modal login, create its private database secret,
+deploy the service, and copy its proxy URL and token to Preview Vercel only.
+Then redeploy Preview and upload the owner's original 10–60 second recording.
+
+Use one L4, zero warm containers, one concurrent inference, and the six-request
+guard. Keep total new live test spend below $5. Do not change production or the
+ChatGPT MCP default. Detailed commands and acceptance checks are in
+`services/indextts/README.md`.
+
+## Current Preview: live Fish enabled — 2026-09-08 UTC
+
+Preview now uses the existing Fish key as a Vercel sensitive Secret and the
+existing Dingkang voice as its default. Only that voice metadata was linked;
+article history and audio caches were not imported. Current READY deployment
+`dpl_DaDXCg3TnCX2fdHeBuEpXkLDGs83` is at
+https://personal-voice-reader-1e214igmh-dingkangs-projects.vercel.app and the
+stable preview alias points to it. Production/development remain unchanged.
+The historical no-Fish preview policy below is superseded by this activation.
+Generation can now incur Fish usage; verification did not synthesize audio.
+
+Vercel env pull redacts this Secret as `[SENSITIVE]` in the restricted local
+snapshot. Never use that placeholder as an API key or upload it as a new value.
+Read-only online probes must skip authorized recovery now that it can dispatch
+real synthesis. ChatGPT OAuth and end-to-end playback remain pending.
+
+## Latest preview repair — 2026-09-08 UTC
+
+The user's first login reached the generic configuration fallback because
+global auth/resource validation required a Fish key. The repaired Preview
+allows authenticated reads without Fish while generation, retries and recovery
+require the credential before queuing work. Owner/resource/auth checks remain.
+65 tests, lint and build passed; the fixed deployment below is READY. Owner
+browser verification after the fix and ChatGPT OAuth remain outstanding.
+
+For cloud snapshots use:
+
+```sh
+npm run deploy:check -- --env-file .env.cloud.preview.local
+```
+
+This avoids local `.env` contaminating the cloud check. Expected for Preview:
+`ready: true`, `missing: []`, `fishConfigured: false`. A missing Fish credential
+is permitted for reader access but not for generation operations.
+
 ## Status and architecture
 
 Updated **2026-09-07**. Vercel login is verified as `dingkwang`, with one personal
 team, `dingkangs-projects`, on active Hobby. The app is linked, three free Neon
-Marketplace databases and three private Blob stores are provisioned, and the
-protected preview build is READY. **Auth0 installation is blocked by required
-browser terms acceptance. No owner login, working production release or personal
-data migration is verified.** A passing build is not authenticated acceptance.
+Marketplace databases, three private Blob stores, and three free Auth0
+tenant/client resources are provisioned. **Preview is fully configured: exact
+`AUTH0_OWNER_SUB`/`AUTH0_MCP_CLIENT_ID` set, stable-alias callback registered,
+custom RS256 API and ChatGPT client created by the owner, and the guarded
+migration initialized the real owner in the empty preview database. Still
+unverified: Dingkang's interactive owner login, ChatGPT scoped-token flow, and
+all of production.** A passing build is not authenticated acceptance.
 
 - Project: https://vercel.com/dingkangs-projects/personal-voice-reader
 - Project ID: `prj_9FHg5FbFvM92jltVCxv891Kxj6fF`
@@ -15,17 +65,23 @@ data migration is verified.** A passing build is not authenticated acceptance.
 - Stable protected preview:
   https://personal-voice-reader-preview-dingkangs-projects.vercel.app
 - Ready preview deployment:
-  https://personal-voice-reader-rdhxdhv5k-dingkangs-projects.vercel.app
-  (`dpl_AzGSCSZALr5gFfUqUL7fwz5rCz72`)
+  https://personal-voice-reader-40mcqi97e-dingkangs-projects.vercel.app
+  (`dpl_AEvRgFhp5Qu3bHEaug9FqG3GZ3iM`; supersedes `dpl_7B8UCS6PL7MpnQPUMpXubUD8cjQA`)
 - Reserved production origin: `https://personal-voice-reader.vercel.app`,
   **not a verified live production release**.
 - Environment settings:
   https://vercel.com/dingkangs-projects/personal-voice-reader/settings/environment-variables
 
-The preview remains behind Vercel login. An operator check confirmed health 200,
-MCP anonymous 401/OAuth challenge, and private data/generation APIs fail closed
-with 503 for missing Auth0 configuration. No production Fish credential is in
-Preview. Temporary operator protection tokens used for checks were revoked.
+The preview remains behind Vercel login. Operator checks confirmed health 200,
+`/auth/login` 307 to the staging tenant with the stable-alias `redirect_uri`
+and provisioned client ID, full alias login chain reaching Auth0 without
+callback mismatch, MCP anonymous 401 with `resource_metadata` challenge,
+correct protected-resource metadata and RS256 JWKS, and private
+data/generation APIs failing closed with 401 (no anonymous session).
+`/api/jobs/recover` rejects anonymous requests with 401; authorized recovery
+returns 503 `PROVIDER_NOT_CONFIGURED` in Preview (no Fish credential).
+No production Fish credential is in Preview. Temporary operator
+protection tokens used for checks were revoked.
 
 Next.js hosts the private reader and stateless MCP Streamable HTTP endpoint.
 Auth0 web sessions and separately validated Auth0 OAuth JWTs map to the exact
@@ -47,40 +103,74 @@ Private responses use `no-store`, even historical audio, to prevent logout bypas
 Only fingerprinted Next.js static assets are stored by the service worker.
 Activation deletes old app-shell/audio caches. No offline private playback.
 
-## Required human authorization, exact current blocker
+## Required human actions, exact current blocker
 
-Vercel authentication and app/storage provisioning are complete. Do not repeat
-`vercel login`, recreate resources, or use an unrelated project.
+Vercel authentication, app/storage provisioning, and Auth0 installation are
+complete. Do not repeat `vercel login`, recreate resources, use an unrelated
+project, or re-accept Marketplace terms.
 
-The actual Auth0 install attempt selected **Free**, but returned
-`integration_terms_acceptance_required` and `userActionRequired: true`.
-The owner must review and accept terms at:
+The owner accepted the Auth0 Marketplace terms on 2026-09-07; installation
+`icfg_JorZT9IXausUoNnolW8S5HvD` now exists. Three **free-plan** Auth0 resources
+were provisioned and connected by the worker, one per environment:
 
-https://vercel.com/dingkangs-projects/~/integrations/accept-terms/auth0?source=cli
+| Vercel target | Resource | Tenant domain |
+| --- | --- | --- |
+| Development | `ir_As93FIjFC7isvRqs` (`voice-note-development`) | `icfg-jorzt9ixausuonnolw8s5hvd-development.us.auth0.com` |
+| Preview | `ir_Re7SeIm1StvVUzVl` (`voice-note-preview`) | `icfg-jorzt9ixausuonnolw8s5hvd-staging.us.auth0.com` |
+| Production | `ir_cAtINmRdghaAxQj8` (`voice-note-production`) | `icfg-jorzt9ixausuonnolw8s5hvd.us.auth0.com` |
 
-The CLI supplied these policy links:
-https://vercel.com/legal/integration-marketplace-end-users-addendum,
-https://www.okta.com/privacy-policy/, and https://okta.com/legal.
-No Auth0 tenant/client or paid subscription was created by the blocked attempt.
+A fourth resource `client-aquamarine-helmet` (`ir_LbzwFHuVIGlEE7ik`) came from
+the owner's browser flow and syncs inert `PERSONAL_AUDIO_AUTH0_*` variables;
+it was left untouched. The browser-flow resource's client differs from the
+worker-provisioned clients but shares the same tenants.
 
-After browser acceptance, the worker can retry:
+Real `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` and
+integration-issued `AUTH0_SECRET` are synced per environment, and
+`AUTH0_AUDIENCE` is set to each environment's documented `/api/mcp` identifier.
+Both provisioned clients were verified **not** authorized for the Auth0
+Management API, so tenant administration requires the Auth0 Dashboard
+(Vercel Dashboard → Integrations → Auth0 → Manage, or https://manage.auth0.com).
 
-```sh
-vercel integration add auth0 --name voice-note-preview --plan free \
-  -m localhost=http://localhost:3000 -m pathCallback=/auth/callback \
-  --environment preview --no-env-pull --scope dingkangs-projects --non-interactive
-```
+**Preview configuration is complete (2026-09-07).** The owner performed the
+staging dashboard steps: stable-alias callback/logout/web-origin appended to
+the `voice-note-preview` app (client `mfl2SMbQeYEDyTgAwVK7CooLIv3HdM8a`),
+ChatGPT client `3EeI3RgkslActTjSWGaUZ9SbGPSIhZ5X` created (ChatGPT callback
+not yet registered), custom RS256 API `voice-note-api-preview` created with
+the exact preview audience identifier, three scopes, RBAC + Add Permissions,
+and owner user `auth0|6a9f50b05b8fa1c8cdb4cbb1` with direct permission
+assignments. The worker set preview `AUTH0_OWNER_SUB` and
+`AUTH0_MCP_CLIENT_ID`, refreshed the restricted snapshot, and ran the guarded
+`db:migrate`: owner row initialized, all content tables verified empty.
 
-Check the created resource and its exact environment connection. Complete any
-Auth0 tenant/operator consent the provider requires. Continue only on the free
-plan. No Auth0 CLI, standard local Auth0 configuration, or Auth0 connector was
-found; Vercel Marketplace is the available provisioning path.
+**Remaining owner/dashboard steps:**
 
-Per environment, the remaining real fields are `AUTH0_DOMAIN`,
-`AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_OWNER_SUB`, `AUTH0_AUDIENCE`,
-and `AUTH0_MCP_CLIENT_ID`. The exact ChatGPT callback URL must come from its
-connection setup. Never invent a subject, audience/client registration or secret.
-Fresh `AUTH0_SECRET` and `CRON_SECRET` are already configured separately.
+1. **First interactive preview login** (proves the owner session path): while
+   logged into Vercel as `dingkwang`, open
+   https://personal-voice-reader-preview-dingkangs-projects.vercel.app/auth/login
+   and sign in with the staging user. Any non-owner Auth0 user must receive
+   403. No worker can perform this step.
+2. **ChatGPT callback registration** (staging): copy the exact callback URL
+   from ChatGPT's connection setup onto client
+   `3EeI3RgkslActTjSWGaUZ9SbGPSIhZ5X`; its secret goes only into ChatGPT's
+   connection fields. Then test the scoped token against preview `/api/mcp`.
+3. **Vercel deployment protection vs ChatGPT**: preview is behind Vercel SSO
+   login, which ChatGPT's server-side OAuth client cannot complete. Decide
+   before ChatGPT connectivity whether to relax protection after owner auth is
+   proven; do not weaken the app's own Auth0 enforcement.
+4. **Production equivalents** (production tenant): custom API with the
+   production `AUTH0_AUDIENCE`, ChatGPT client + exact callback, owner user
+   and its `user_id`, then set production `AUTH0_OWNER_SUB` /
+   `AUTH0_MCP_CLIENT_ID` in Vercel env, run guarded `db:migrate`, deploy
+   production, and complete owner validation gates.
+
+After real owner protection is proven, the worker continues: redeploy,
+owner/wrong-user/MCP/Workflow checks, production deploy, guarded backup import
+(twice, comparing counts and checksums), ChatGPT connection, and exactly one
+short Fish synthesis.
+
+Never paste credentials in an issue, chat, Git, CLI argument, screenshot or log.
+Use Vercel environment settings or a restricted ignored environment file.
+Existing `.env` contains the Fish credential; do not overwrite or print it.
 
 Never paste credentials in an issue, chat, Git, CLI argument, screenshot or log.
 Use Vercel environment settings or a restricted ignored environment file.
@@ -147,9 +237,12 @@ Runtime does not create a JSON store or fall back to filesystem storage.
 
 Current schema status: schema 001 plus the matching `deployment_identity` exists
 in each new database. Bootstrap verified the exact new Neon project/hostname,
-refused unrelated unmarked databases, and used `sslmode=verify-full`. It created
-**no owner**. All owner/content/job tables are empty. Once genuine Auth0 fields
-are configured, run the normal `db:migrate` to initialize the actual owner.
+refused unrelated unmarked databases, and used `sslmode=verify-full`. Preview
+has since run the guarded `db:migrate` with real Auth0 fields: the exact owner
+`auth0|6a9f50b05b8fa1c8cdb4cbb1` is initialized; preview content tables remain
+empty (documents/voices/jobs/audio_cache all 0). Development and production
+still have **no owner**; run `db:migrate` per target only after that target's
+genuine Auth0 fields are configured.
 
 Real-service evidence: preview Neon passed concurrent idempotency (eight calls,
 one job), conflict rejection, two persistent claims across three jobs and slot
@@ -173,22 +266,22 @@ must be checked in Fish and linked by reference ID, not blindly recloned.
 
 ## Auth0 web application
 
-For each environment:
+The Regular Web Applications already exist, provisioned by the Vercel
+Marketplace integration (one dedicated tenant per environment; see the table
+above). `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` and
+`AUTH0_SECRET` are already synced into each Vercel environment. Verified
+registration state: production callback `https://personal-voice-reader.vercel.app/auth/callback`,
+development `http://localhost:3000/auth/callback`, and the preview stable-alias
+callback are all registered (public authorize probing returned 302 for each;
+localhost is correctly rejected on staging). Per-environment dashboard checks:
 
-1. Create an Auth0 **Regular Web Application**, named for Voice Note + environment.
-2. Enable Authorization Code flow. The SDK manages PKCE, transaction state,
-   encrypted HttpOnly SameSite cookies and callback validation.
-3. Allowed Callback URL: `https://<stable-host>/auth/callback`.
-4. Allowed Logout URL: `https://<stable-host>`.
-5. Allowed Web Origin: `https://<stable-host>`.
-6. For local development only, register the exact localhost origin/callback too.
-   Do not use wildcard production callbacks.
-7. Set `AUTH0_DOMAIN` to the tenant hostname without `https://`.
-   Set `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and a fresh 32-byte hexadecimal
-   `AUTH0_SECRET`. Keep different secrets and clients per environment.
-8. Find Dingkang in Auth0 Users and set his exact `user_id` as `AUTH0_OWNER_SUB`.
+1. Allowed Callback URL: `https://<stable-host>/auth/callback`.
+2. Allowed Logout URL: `https://<stable-host>`.
+3. Allowed Web Origin: `https://<stable-host>`.
+4. Do not use wildcard production callbacks.
+5. Find Dingkang in Auth0 Users and set his exact `user_id` as `AUTH0_OWNER_SUB`.
    Email/name matching is intentionally not supported.
-9. Disable public sign-up if the tenant permits it. The app still rejects all
+6. Disable public sign-up if the tenant permits it. The app still rejects all
    other subjects before saving a session and on every private route.
 
 Web scopes are `openid profile`. Sessions expire after twelve hours and do not

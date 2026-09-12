@@ -16,3 +16,4 @@ scripts/browser*
 scripts/check-sessions.mjs
 playwright.config.ts
 vitest.config.ts
+services

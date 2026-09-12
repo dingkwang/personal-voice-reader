@@ -23,6 +23,7 @@ export function useReader(initialSessionId?: string) {
   const [isSaving, setIsSaving] = useState(false);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
+  const defaultVoiceRef = useRef("");
   const [speed, setSpeed] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -150,12 +151,13 @@ export function useReader(initialSessionId?: string) {
     let cancelled = false;
     void loadHistory();
     openInitial();
-    api<{ voices: Voice[] }>("/api/voices")
-      .then(({ voices: items }) => {
+    api<{ voices: Voice[]; defaultVoiceId?: string }>("/api/voices")
+      .then(({ voices: items, defaultVoiceId }) => {
         if (cancelled) return;
         setVoices(items);
+        defaultVoiceRef.current = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
         if (!settingsRef.current.voiceId) {
-          const id = items[0]?.id || "";
+          const id = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
           settingsRef.current.voiceId = id;
           setVoiceId(id);
         }
@@ -290,6 +292,7 @@ export function useReader(initialSessionId?: string) {
     setSource(emptyDraft);
     setActiveIndex(0);
     setMessage("");
+    if (defaultVoiceRef.current) changeSettings({ voiceId: defaultVoiceRef.current, speed: 1 });
     window.history.replaceState(null, "", "/");
   }
 
@@ -524,6 +527,7 @@ export function useReader(initialSessionId?: string) {
   }
 
   function addVoice(voice: Voice) {
+    if (voice.provider === "indextts") defaultVoiceRef.current = voice.id;
     setVoices((items) => [...items, voice]);
     setVoiceError("");
     changeSettings({ ...settingsRef.current, voiceId: voice.id });
@@ -536,9 +540,18 @@ export function useReader(initialSessionId?: string) {
     setTime({ current: seconds, duration: audio.duration });
   }
 
+  async function makeWebDefault() {
+    const selected = settingsRef.current.voiceId;
+    try {
+      const result = await api<{ defaultVoiceId: string }>("/api/voices", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: selected }) });
+      defaultVoiceRef.current = result.defaultVoiceId;
+      setMessage("已设为网页默认声音");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "设置失败"); }
+  }
+
   async function retryFailed(segmentId: string) {
     const current = jobRef.current;
-    if (!current || !window.confirm("之前的请求可能已计费。确认再次生成这一段？不确定的请求需等待十分钟。")) return;
+    if (!current || !window.confirm("之前的请求可能已计费。确认再次生成这一段？不确定的请求需等待当前任务结束。")) return;
     const generation = generationRef.current;
     try {
       const { job: next } = await api<{ job: JobStatus }>(`/api/jobs/${current.id}`, {
@@ -557,6 +570,6 @@ export function useReader(initialSessionId?: string) {
     voices, voiceId, speed, changeSettings, addVoice, voiceError,
     activeIndex, isPlaying, isPreparing, time, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
-    job, retryFailed,
+    job, retryFailed, makeWebDefault,
   };
 }

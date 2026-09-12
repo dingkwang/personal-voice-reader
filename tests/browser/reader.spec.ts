@@ -186,7 +186,7 @@ test("uncertain generation exposes explicit retry without another provider reque
   await page.screenshot({ path: ".evidence/browser/mobile-uncertain-retry.png", fullPage: true });
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "重试第 1 段" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "请等待十分钟" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "请等待当前请求结束" })).toBeVisible();
 });
 
 test("closing a voice dialog isolates its late completion", async ({ page, context }) => {
@@ -194,6 +194,7 @@ test("closing a voice dialog isolates its late completion", async ({ page, conte
   await page.goto("/");
   await page.getByRole("button", { name: "添加声音", exact: true }).click();
   await page.getByLabel("声音名称").fill("合成迟到声音");
+  await page.getByRole("combobox", { name: "语音服务" }).selectOption("fish");
   await page.getByLabel("Fish Voice ID").fill("synthetic-reference-2");
   let release: () => void = () => {};
   const hold = new Promise<void>((resolve) => { release = resolve; });
@@ -215,3 +216,44 @@ test("closing a voice dialog isolates its late completion", async ({ page, conte
   await expect(page.getByRole("combobox", { name: "朗读声音" })).toHaveValue("voice_browser");
   await expect(page.getByRole("textbox", { name: "要朗读的文字" })).toHaveValue("保留新的合成草稿");
 });
+
+for (const width of [1440, 390]) {
+  test(`IndexTTS web default, async playback and Fish history at ${width}px`, async ({ page, context }) => {
+    await login(context);
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    await page.goto("/");
+    const old = await context.request.post("/api/documents", { headers: { Origin: base }, data: { text: `旧 Fish 兼容验收 ${width}`, title: `旧 Fish ${width}` } });
+    const oldBody = await old.json();
+    const oldJob = await context.request.post("/api/tts", { headers: { Origin: base }, data: { documentId: oldBody.document.id, voiceId: "voice_browser", speed: 1, idempotencyKey: `index-old-${width}` } });
+    const oldJobId = (await oldJob.json()).job.id;
+    await expect.poll(async () => (await (await context.request.get(`/api/jobs/${oldJobId}`)).json()).job.status, { timeout: 20000 }).toBe("completed");
+    await page.reload();
+    const voices = page.getByRole("combobox", { name: "朗读声音" });
+    await voices.selectOption("voice_index_browser");
+    await page.getByRole("button", { name: "设为网页默认" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "已设为网页默认声音" })).toBeVisible();
+    await page.reload();
+    await expect(voices).toHaveValue("voice_index_browser");
+    await page.getByRole("textbox", { name: "文章标题" }).fill(`Index 网页验收 ${width}`);
+    await page.getByRole("textbox", { name: "要朗读的文字" }).fill(`IndexTTS 第${width}段合成验收。\n\n第二段是用于断线恢复的合成文字。\n\n第三段检查分段播放。`);
+    await page.locator(".primary-read-button").click();
+    await expect(page.getByRole("status").filter({ hasText: "后台生成中" })).toBeVisible({ timeout: 20000 });
+    const url = page.url();
+    await page.goto("about:blank");
+    await page.goto(url);
+    await expect(page.getByRole("status").filter({ hasText: "音频已就绪" })).toBeVisible({ timeout: 65000 });
+    await expect(voices).toHaveValue("voice_index_browser");
+    await page.locator(".primary-read-button").click();
+    await expect(page.getByRole("button", { name: "暂停", exact: true })).toBeVisible();
+    await page.screenshot({ path: `.evidence/browser/${width}-indextts-playback.png`, fullPage: true });
+    await page.getByRole("button", { name: "暂停", exact: true }).click();
+    await voices.selectOption("voice_browser");
+    await page.getByRole("button", { name: "新建会话", exact: true }).click();
+    await expect(voices).toHaveValue("voice_index_browser");
+    // Existing Fish sessions restore their saved voice, despite the new web default.
+    await page.locator(".history-item").filter({ hasText: `旧 Fish ${width}` }).click();
+    await expect(voices).toHaveValue("voice_browser");
+    await page.getByRole("button", { name: "设为网页默认" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "已设为网页默认声音" })).toBeVisible();
+  });
+}

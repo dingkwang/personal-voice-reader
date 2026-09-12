@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { requireOAuth, type Scope } from "@/lib/auth";
-import { appOrigin } from "@/lib/config";
+import { appOrigin, fishApiKey } from "@/lib/config";
 import { AppError, errorResponse } from "@/lib/errors";
 import { listVoices } from "@/lib/store";
 import { createReading, createReadingSchema, readingStatus } from "@/lib/jobs";
@@ -44,6 +44,8 @@ export async function POST(request: Request) {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, (input) => safe(async () => {
       need("create:readings");
+      // Generation requires the Fish provider; fail closed before queuing work.
+      fishApiKey();
       const queued = await createReading(input, owner);
       after(() => dispatchJob(queued.jobId, owner));
       const job = await readingStatus(queued.jobId, owner);

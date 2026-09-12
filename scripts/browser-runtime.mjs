@@ -3,6 +3,7 @@ import { readFile, appendFile } from "node:fs/promises";
 import { MockAgent, setGlobalDispatcher } from "undici";
 if (process.env.VERCEL || !process.env.BROWSER_TEST_AUDIO || !process.env.BROWSER_TEST_LOG) throw new Error("Isolated browser harness only");
 const original = globalThis.fetch;
+const indexRequests = new Map();
 const mp3 = await readFile(process.env.BROWSER_TEST_AUDIO);
 const network = new MockAgent();
 network.disableNetConnect();
@@ -16,6 +17,10 @@ network.get("https://vercel.com").intercept({ path: /\/api\/blob.*/, method: "PU
   responseOptions: { headers: { "Content-Type": "application/json" } } };
 }).persist();
 network.get("https://synthetic.private.blob.vercel-storage.com").intercept({ path: /.*/, method: "GET" }).reply((options) => {
+  if (options.path.startsWith("/references/")) {
+    const data = Buffer.from("RIFF0000WAVEsynthetic-reference");
+    return { statusCode: 200, data, responseOptions: { headers: { "Content-Type": "audio/wav", "Content-Length": String(data.length) } } };
+  }
   const headers = new Headers(options.headers);
   const match = /^bytes=(\d+)-(\d+)$/.exec(headers.get("range") || "");
   const body = match ? mp3.subarray(Number(match[1]), Number(match[2]) + 1) : mp3;
@@ -27,12 +32,27 @@ network.get("https://synthetic.private.blob.vercel-storage.com").intercept({ pat
 setGlobalDispatcher(network);
 globalThis.fetch = async function(input, init) {
   const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.hostname === "synthetic.modal.run") {
+    const headers = new Headers(init?.headers);
+    if (headers.get("Modal-Key") !== "synthetic-key" || headers.get("Modal-Secret") !== "synthetic-secret") return new Response(null, { status: 401 });
+    if (url.pathname.endsWith("/audio")) return new Response(mp3, { headers: { "Content-Type": "audio/mpeg" } });
+    const first = indexRequests.get(url.pathname);
+    if (!first) {
+      indexRequests.set(url.pathname, Date.now());
+      await appendFile(process.env.BROWSER_TEST_LOG, "mock-indextts-start\n");
+      return Response.json({ status: "queued" });
+    }
+    return Response.json({ status: Date.now() - first > 5500 ? "ready" : "running" });
+  }
   if (url.hostname === "api.fish.audio") {
     if (url.pathname !== "/v1/tts") throw new Error("Clone calls forbidden in automated tests");
     await appendFile(process.env.BROWSER_TEST_LOG, "mock-fish\n");
     await new Promise((resolve) => setTimeout(resolve, 2500));
     if (String(init?.body || "").includes("[[synthetic-failure]]")) throw new Error("Synthetic provider timeout");
     return new Response(mp3, { headers: { "Content-Type": "audio/mpeg" } });
+  }
+  if (url.hostname.endsWith(".private.blob.vercel-storage.com") && url.pathname.startsWith("/references/")) {
+    return new Response("RIFF0000WAVEsynthetic-reference", { headers: { "Content-Type": "audio/wav" } });
   }
   if (url.hostname.endsWith(".private.blob.vercel-storage.com")) {
     const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));

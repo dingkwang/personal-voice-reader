@@ -9,6 +9,7 @@ beforeEach(async () => {
   fixture = await testDatabase();
   vi.stubEnv("AUTH0_OWNER_SUB", TEST_OWNER);
   vi.stubEnv("DEFAULT_VOICE_ID", "voice_test");
+  vi.stubEnv("FISH_API_KEY", "synthetic-test-key");
   mocks.start.mockReset().mockResolvedValue({ runId: "mock-run" });
   mocks.getRun.mockReset().mockReturnValue({ status: Promise.resolve("failed") });
 });
