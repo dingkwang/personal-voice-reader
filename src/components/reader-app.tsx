@@ -31,18 +31,16 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
     text, title, document, history, historyLoading, historyError, refreshHistory,
     loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
     voices, voiceId, speed, changeSettings, addVoice, voiceError,
-    activeIndex, isPlaying, isPreparing, time, message, setMessage,
+    activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
-    job, retryFailed,
+    job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,
   } = useReader(initialSessionId);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const editorDisabled = isSaving || Boolean(loadingId);
   const queueDisabled = editorDisabled || isDirty;
 
-  const progress = document
-    ? ((activeIndex + (time.duration ? time.current / time.duration : 0)) /
-        document.segments.length) *
-      100
+  const progress = document && time.duration
+    ? Math.min(100, ((activeIndex + time.current / time.duration) / document.segments.length) * 100)
     : 0;
 
   return (
@@ -151,20 +149,22 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             <label htmlFor="voice">朗读声音</label>
             <div className="select-row">
               <div className="voice-avatar" aria-hidden="true"><span /><span /><span /></div>
-              <select id="voice" value={voiceId} onChange={(event) => changeSettings({ voiceId: event.target.value, speed })}>
+              <select id="voice" value={voiceId} onChange={(event) => changeSettings({ voiceId: event.target.value, speed: voices.find((v) => v.id === event.target.value)?.provider === "replicate" ? 1 : speed })}>
                 {!voiceId && <option value="">请选择声音</option>}
                 {voiceId && !voices.some((voice) => voice.id === voiceId) && <option value={voiceId}>已保存的声音（暂不可用）</option>}
-                {voices.map((voice) => <option value={voice.id} key={voice.id}>{voice.name}</option>)}
+                {voices.map((voice) => <option value={voice.id} key={voice.id}>{voice.name} · {voice.provider === "replicate" ? "IndexTTS 2" : voice.provider === "indextts" ? "IndexTTS-2.5" : "Fish"}{voice.available === false ? "（未配置）" : ""}</option>)}
               </select>
               <button className="add-voice-inline" onClick={() => setShowVoiceModal(true)}>
                 <PlusIcon size={16} /> 添加
               </button>
             </div>
+            <button className="add-voice-inline" disabled={!voiceId} onClick={() => void makeWebDefault()}>设为网页默认</button>
           </div>
           <div className="control-field speed-field">
             <div className="field-label-row"><label htmlFor="speed">语速</label><strong>{speed}×</strong></div>
             <input
               id="speed"
+              disabled={voices.find((voice) => voice.id === voiceId)?.provider === "replicate"}
               type="range"
               min="0.7"
               max="1.5"
@@ -191,7 +191,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             ))}
           </div>
         </div>}
-        {message && <div className="notice" role="alert"><span>!</span>{message}<button onClick={() => setMessage("")} aria-label="关闭"><CloseIcon size={16} /></button></div>}
+        {message && <div className="notice" role={message === "已设为网页默认声音" ? "status" : "alert"}><span>{message === "已设为网页默认声音" ? "✓" : "!"}</span>{message}<button onClick={() => setMessage("")} aria-label="关闭"><CloseIcon size={16} /></button></div>}
 
         {document && (
           <section className="reading-card" aria-label="播放队列">
@@ -200,7 +200,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
                 <p className="eyebrow">{isDirty ? "原会话段落 · 保存后更新" : "朗读段落"}</p>
                 <h2>{document.title}</h2>
               </div>
-              <span>{activeIndex + 1} / {document.segments.length} 段</span>
+              <span>{activeIndex + 1} / {document.segments.length} 段 · {totalDuration ? formatTime(totalDuration) : "准备中"}</span>
             </div>
             <div className="segments">
               {document.segments.map((segment, index) => (
@@ -227,7 +227,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
           <div className="player-inner">
             <div className="now-playing">
               <div className="mini-cover"><span /><span /><span /><span /></div>
-              <div><strong>{document.title}</strong><span>{isPreparing ? "正在生成音频…" : `第 ${activeIndex + 1} 段 · ${voices.find((voice) => voice.id === voiceId)?.name || "声音"}`}</span></div>
+              <div><strong>{document.title}</strong><span>{isPreparing ? "正在准备后续音频…" : voices.find((voice) => voice.id === voiceId)?.name || "声音"}</span></div>
             </div>
             <div className="transport">
               <button onClick={goPrevious} aria-label="上一段" disabled={queueDisabled || activeIndex === 0}><BackIcon /></button>
@@ -249,6 +249,10 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
                 onChange={(event) => seek(Number(event.target.value))}
               />
               <span>{formatTime(time.duration)}</span>
+            </div>
+            <div className="player-actions">
+              <label className="loop-toggle"><input type="checkbox" checked={loopAll} onChange={toggleLoop} />整篇循环</label>
+              <button className="text-button" onClick={() => void downloadDocument()} disabled={!document || isPreparing}>下载整篇 WAV</button>
             </div>
           </div>
         </aside>
@@ -272,6 +276,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   const [providerVoiceId, setProviderVoiceId] = useState("");
   const [audio, setAudio] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
+  const [provider, setProvider] = useState<"indextts" | "fish">("fish");
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -282,7 +287,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   const recordingStartedAtRef = useRef(0);
   const mountedRef = useRef(true);
   const cloneRequestRef = useRef<{ signature: string; input: {
-    name: string; language: string; consent: boolean; uploadIds: string[]; idempotencyKey: string;
+    name: string; language: string; consent: boolean; uploadIds: string[]; idempotencyKey: string; provider: "indextts" | "fish";
   } } | null>(null);
 
   async function toggleRecording() {
@@ -349,6 +354,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return setError("请给声音起一个名字");
+    if (provider === "indextts" && audio.length !== 1) return setError("请上传一段 10–60 秒的参考录音");
     if (!audio.length && !providerVoiceId.trim()) return setError("请录音、上传音频，或填写已有 Fish Voice ID");
     if (audio.length && !consent) return setError("请确认你拥有并获准克隆这个声音");
     setSaving(true);
@@ -356,7 +362,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
     try {
       let result: { voice: Voice };
       if (audio.length) {
-        const signature = JSON.stringify([name.trim(), audio.map((file) => [file.name, file.size, file.lastModified, file.type])]);
+        const signature = JSON.stringify([provider, name.trim(), audio.map((file) => [file.name, file.size, file.lastModified, file.type])]);
         if (cloneRequestRef.current?.signature !== signature) {
           const { upload } = await import("@vercel/blob/client");
           const uploadIds: string[] = [];
@@ -369,7 +375,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
               clientPayload: reservation.id, contentType: file.type.split(";")[0], multipart: true });
             uploadIds.push(reservation.id);
           }
-          cloneRequestRef.current = { signature, input: { name: name.trim(), language: "zh", consent, uploadIds, idempotencyKey: crypto.randomUUID() } };
+          cloneRequestRef.current = { signature, input: { provider, name: name.trim(), language: "zh", consent, uploadIds, idempotencyKey: crypto.randomUUID() } };
         }
         result = await api<{ voice: Voice }>("/api/voices", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -396,8 +402,9 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
         <button className="modal-close" onClick={onClose} aria-label="关闭"><CloseIcon /></button>
         <p className="eyebrow">创建专属声音</p>
         <h2 id="voice-title">添加一个声音</h2>
-        <p className="modal-lead">录制 30–60 秒清晰人声，或上传 2–3 段短录音。Fish 会创建一个私密、可重复使用的 Voice ID。</p>
+        <p className="modal-lead">{provider === "indextts" ? "上传一段 10–60 秒清晰人声。保存后将作为网页默认声音。" : "录制清晰人声或连接已有 Fish Voice ID。"}</p>
         <form onSubmit={submit}>
+          <label className="form-label">语音服务<select value={provider} disabled={saving || recording} onChange={(event) => { setProvider(event.target.value as "indextts" | "fish"); setAudio([]); setError(""); }}><option value="indextts">IndexTTS-2.5</option><option value="fish">Fish Audio</option></select></label>
           <label className="form-label">声音名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：我的声音" maxLength={60} /></label>
           <div className={`record-zone ${recording ? "recording" : ""}`}>
             <button type="button" className="record-button" onClick={() => void toggleRecording()}>
@@ -407,10 +414,10 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
               <strong>{recording ? `正在录音 ${recordingSeconds} 秒，点击结束` : audio.length ? "录音已经准备好" : "用手机录一段"}</strong>
               <span>{audio.length ? `${audio.length} 段 · ${(audio.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024).toFixed(1)} MB` : "安静环境下自然说话 30–60 秒"}</span>
             </div>
-            <label className="file-pill">上传<input type="file" accept="audio/*" multiple onChange={(event) => setAudio(Array.from(event.target.files || []).slice(0, 20))} /></label>
+            <label className="file-pill">上传<input type="file" accept="audio/*" multiple={provider === "fish"} onChange={(event) => setAudio(Array.from(event.target.files || []).slice(0, provider === "indextts" ? 1 : 20))} /></label>
           </div>
-          <div className="or-divider"><span>或者连接已有声音</span></div>
-          <label className="form-label">Fish Voice ID<input value={providerVoiceId} onChange={(event) => setProviderVoiceId(event.target.value)} placeholder="例如 98abc…" disabled={Boolean(audio.length)} /></label>
+          {provider === "fish" && <><div className="or-divider"><span>或者连接已有声音</span></div>
+          <label className="form-label">Fish Voice ID<input value={providerVoiceId} onChange={(event) => setProviderVoiceId(event.target.value)} placeholder="例如 98abc…" disabled={Boolean(audio.length)} /></label></>}
           {Boolean(audio.length) && <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>我确认这是我的声音，或我已获得声音所有者的明确授权。</span></label>}
           {error && <p className="form-error">{error}</p>}
           <button className="modal-submit" disabled={saving || recording}>{saving ? <><span className="spinner light" />正在创建…</> : "保存声音"}</button>

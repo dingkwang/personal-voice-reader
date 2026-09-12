@@ -1,4 +1,10 @@
-export type VoiceProvider = "fish" | "elevenlabs" | "minimax" | "local";
+export type VoiceProvider = "fish" | "indextts" | "replicate" | "elevenlabs" | "minimax" | "local";
+
+export type VoiceReference = { pathname: string; hash: string; size: number; seconds: number };
+export type SynthesisSettings = {
+  provider: VoiceProvider; model: string; providerVoiceId: string | null;
+  reference?: VoiceReference; language?: string;
+};
 
 export type Voice = {
   id: string;
@@ -8,6 +14,8 @@ export type Voice = {
   language: string;
   createdAt: string;
   source: "default" | "cloned" | "linked";
+  reference?: VoiceReference;
+  available?: boolean;
 };
 
 export type SegmentStatus = "idle" | "queued" | "working" | "ready" | "error" | "uncertain";
@@ -40,6 +48,7 @@ export type ReadingJob = {
   model: string;
   status: "queued" | "running" | "completed" | "attention";
   run_id: string | null;
+  synthesis?: SynthesisSettings | null;
 };
 export type JobStatus = ReadingJob & {
   items: { segment_id: string; status: SegmentStatus; error: string | null; audioUrl: string | null }[];

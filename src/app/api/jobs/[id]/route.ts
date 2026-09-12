@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { requireOwner } from "@/lib/auth";
 import { errorResponse } from "@/lib/errors";
-import { readingStatus, retrySegment } from "@/lib/jobs";
+import { readingStatus, retrySegment, requireJobProvider } from "@/lib/jobs";
 import { dispatchJob } from "@/lib/dispatch";
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -16,6 +16,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const owner = await requireOwner(request);
     const { id } = await params;
+    await requireJobProvider(id, owner);
     const input = z.object({ segmentId: z.string().min(5).max(100), acknowledgeBilling: z.literal(true) }).parse(await request.json());
     await retrySegment(id, input.segmentId, input.acknowledgeBilling, owner);
     after(() => dispatchJob(id, owner));

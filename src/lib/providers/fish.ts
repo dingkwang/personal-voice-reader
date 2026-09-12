@@ -1,3 +1,4 @@
+import { fishApiKey } from "@/lib/config";
 import { AppError } from "@/lib/errors";
 import type {
   CloneVoiceInput,
@@ -6,18 +7,6 @@ import type {
 } from "@/lib/providers/types";
 
 const FISH_API_ROOT = "https://api.fish.audio";
-
-function apiKey(): string {
-  const key = process.env.FISH_API_KEY || process.env.FISH_AUDIO_API_KEY;
-  if (!key) {
-    throw new AppError(
-      "尚未配置 FISH_API_KEY，请先在环境文件中添加 Fish Audio API key",
-      503,
-      "PROVIDER_NOT_CONFIGURED",
-    );
-  }
-  return key;
-}
 
 async function fishError(response: Response): Promise<AppError> {
   await response.body?.cancel();
@@ -33,7 +22,7 @@ export class FishVoiceProvider implements VoiceProviderAdapter {
     const response = await fetch(`${FISH_API_ROOT}/v1/tts`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey()}`,
+        Authorization: `Bearer ${fishApiKey()}`,
         "Content-Type": "application/json",
         model: input.model,
       },
@@ -76,7 +65,7 @@ export class FishVoiceProvider implements VoiceProviderAdapter {
 
     const response = await fetch(`${FISH_API_ROOT}/model`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey()}` },
+      headers: { Authorization: `Bearer ${fishApiKey()}` },
       body,
       signal: AbortSignal.timeout(120_000),
       cache: "no-store",

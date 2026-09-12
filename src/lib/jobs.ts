@@ -5,7 +5,8 @@ import { appOrigin, ownerSubject, required } from "./config";
 import { AppError } from "./errors";
 import { documentSchema, makeDocument } from "./documents";
 import { findDocument, findSegment, findVoice, insertDocument } from "./store";
-import { audioKey } from "./audio-key";
+import { providerReady, synthesisSettings } from "./tts-config";
+import { audioKey, stableJson } from "./audio-key";
 import { sha256 } from "./blob";
 import type { JobStatus, ReadingJob, Segment, Voice } from "./types";
 
@@ -33,24 +34,27 @@ export async function queueDocument(input: QueueInput, owner = ownerSubject()) {
 async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; idempotencyKey: string }), owner: string) {
   return database().transaction(async (db) => {
     await ownerLock(db, owner);
-    const model = process.env.FISH_TTS_MODEL || "s2-pro";
-    const requestHash = sha256(JSON.stringify({
-      document: "documentId" in input ? input.documentId : { text: input.text, title: input.title || "" },
-      voiceId: input.voiceId, speed: input.speed, model,
-    }));
+    const voice = await findVoice(input.voiceId, owner, db);
+    if (voice.provider === "replicate" && input.speed !== 1) throw new AppError("IndexTTS 2 当前使用自然语速 1×", 422);
     const prior = await db.query<ReadingJob & { request_hash: string }>(
       "SELECT j.*,r.request_hash FROM job_requests r JOIN jobs j ON j.owner=r.owner AND j.id=r.job_id WHERE r.owner=$1 AND r.key=$2", [owner, input.idempotencyKey]);
+    const synthesis = prior.rows[0]?.synthesis || synthesisSettings(voice);
+    const model = prior.rows[0]?.model || synthesis.model;
+    const requestHash = sha256((["indextts", "replicate"].includes(synthesis.provider) ? stableJson : JSON.stringify)({
+      document: "documentId" in input ? input.documentId : { text: input.text, title: input.title || "" },
+      voiceId: input.voiceId, speed: input.speed, model,
+      ...(["indextts", "replicate"].includes(synthesis.provider) ? { synthesis } : {}),
+    }));
     if (prior.rows[0]) {
       if (prior.rows[0].request_hash !== requestHash) throw new AppError("幂等键已用于不同内容", 409, "IDEMPOTENCY_CONFLICT");
       return { jobId: prior.rows[0].id, documentId: prior.rows[0].document_id };
     }
-    const voice = await findVoice(input.voiceId, owner, db);
     const document = "documentId" in input ? await findDocument(input.documentId, owner, db) : await insertDocument(makeDocument(input), owner, db);
     // Reconnects/settings toggles may create fresh request IDs: coalesce an active
     // identical task while preserving explicit new snapshots.
     const active = await db.query<ReadingJob>(
-      "SELECT * FROM jobs WHERE owner=$1 AND document_id=$2 AND voice_id=$3 AND speed=$4 AND model=$5 AND status IN ('queued','running') LIMIT 1",
-      [owner, document.id, voice.id, input.speed, model]);
+      "SELECT * FROM jobs WHERE owner=$1 AND document_id=$2 AND voice_id=$3 AND speed=$4 AND model=$5 AND status IN ('queued','running') AND (synthesis=$6::jsonb OR (synthesis IS NULL AND $7='fish')) LIMIT 1",
+      [owner, document.id, voice.id, input.speed, model, synthesis, voice.provider]);
     if (active.rows[0]) {
       await db.query("INSERT INTO job_requests(owner,key,request_hash,job_id) VALUES($1,$2,$3,$4)", [owner, input.idempotencyKey, requestHash, active.rows[0].id]);
       return { jobId: active.rows[0].id, documentId: document.id };
@@ -58,11 +62,13 @@ async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; ide
     const count = await db.query<{ count: string }>("SELECT count(*) FROM jobs WHERE owner=$1 AND status IN ('queued','running')", [owner]);
     if (Number(count.rows[0].count) >= 10) throw new AppError("队列已满，请等待现有任务完成", 429, "QUEUE_FULL");
     const id = `job_${randomUUID()}`;
-    await db.query(`INSERT INTO jobs(owner,id,document_id,idempotency_key,request_hash,voice_id,speed,model)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [owner, id, document.id, input.idempotencyKey, requestHash, voice.id, input.speed, model]);
+    await db.query(`INSERT INTO jobs(owner,id,document_id,idempotency_key,request_hash,voice_id,speed,model,synthesis)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [owner, id, document.id, input.idempotencyKey, requestHash, voice.id, input.speed, model, synthesis]);
     await db.query("INSERT INTO job_requests(owner,key,request_hash,job_id) VALUES($1,$2,$3,$4)", [owner, input.idempotencyKey, requestHash, id]);
     for (const segment of document.segments) {
-      const key = audioKey({ provider: voice.provider, providerVoiceId: voice.providerVoiceId, text: segment.text, model, speed: input.speed });
+      const key = ["indextts", "replicate"].includes(voice.provider)
+        ? sha256(stableJson({ version: 2, synthesis, text: segment.text, speed: input.speed }))
+        : audioKey({ provider: voice.provider, providerVoiceId: voice.providerVoiceId, text: segment.text, model, speed: input.speed });
       await db.query("INSERT INTO job_items(owner,job_id,segment_id,position,key) VALUES($1,$2,$3,$4,$5)", [owner, id, segment.id, segment.index, key]);
       await db.query("UPDATE segments SET desired_job=$3 WHERE owner=$1 AND id=$2", [owner, segment.id, id]);
     }
@@ -113,6 +119,18 @@ export async function claimNext(jobId: string, owner: string): Promise<Generatio
     const { rows } = await db.query<ReadingJob>("SELECT * FROM jobs WHERE owner=$1 AND id=$2", [owner, jobId]);
     if (!rows[0]) return "done";
     const job = rows[0];
+    if (["indextts", "replicate"].includes(job.synthesis?.provider || "")) {
+      const resumed = await db.query<{ segment_id: string; key: string; attempt: string }>(`UPDATE generation_claims c SET poll_after=now()+interval '40 seconds'
+        FROM job_items i WHERE c.owner=$1 AND c.job_id=$2 AND c.poll_after<=now() AND c.expires_at>now()
+        AND i.owner=c.owner AND i.job_id=c.job_id AND i.segment_id=c.segment_id AND i.status='working'
+        AND c.attempt=(SELECT attempt FROM generation_claims WHERE owner=$1 AND job_id=$2 AND poll_after<=now() ORDER BY poll_after LIMIT 1)
+        RETURNING c.segment_id,c.key,c.attempt`, [owner, jobId]);
+      if (resumed.rows[0]) {
+        const c = resumed.rows[0];
+        const [{ segment }, voice] = await Promise.all([findSegment(c.segment_id, owner, db), findVoice(job.voice_id, owner, db)]);
+        return { attempt: c.attempt, key: c.key, segment, voice, job, owner };
+      }
+    }
     const items = await db.query<{ segment_id: string; key: string }>(
       "SELECT segment_id,key FROM job_items WHERE owner=$1 AND job_id=$2 AND status='queued' ORDER BY position", [owner, jobId]);
     for (const item of items.rows) {
@@ -126,8 +144,8 @@ export async function claimNext(jobId: string, owner: string): Promise<Generatio
       const slot = claims.rows.some((c) => c.slot === 1) ? 2 : 1;
       const attempt = randomUUID();
       const [{ segment }, voice] = await Promise.all([findSegment(item.segment_id, owner, db), findVoice(job.voice_id, owner, db)]);
-      await db.query(`INSERT INTO generation_claims(owner,slot,key,job_id,segment_id,attempt,expires_at)
-        VALUES($1,$2,$3,$4,$5,$6,now()+interval '10 minutes')`, [owner, slot, item.key, jobId, segment.id, attempt]);
+      await db.query(`INSERT INTO generation_claims(owner,slot,key,job_id,segment_id,attempt,expires_at,poll_after)
+        VALUES($1,$2,$3,$4,$5,$6,now()+$7::interval,now()+interval '40 seconds')`, [owner, slot, item.key, jobId, segment.id, attempt, ["indextts", "replicate"].includes(job.synthesis?.provider || "") ? "30 minutes" : "10 minutes"]);
       await db.query("UPDATE job_items SET status='working',attempt=$4 WHERE owner=$1 AND job_id=$2 AND segment_id=$3", [owner, jobId, segment.id, attempt]);
       await db.query("UPDATE jobs SET status='running',updated_at=now() WHERE owner=$1 AND id=$2", [owner, jobId]);
       return { attempt, key: item.key, segment, voice, job, owner };
@@ -155,7 +173,7 @@ export async function completeGeneration(claim: Generation, audio: { objectHash:
 export async function uncertainGeneration(claim: Generation) {
   await database().transaction(async (db) => {
     await ownerLock(db, claim.owner);
-    await db.query(`UPDATE job_items SET status='uncertain',error='生成结果不确定，可能已计费。十分钟后可确认重试。'
+    await db.query(`UPDATE job_items SET status='uncertain',error='生成结果不确定，可能已计费。等待当前请求结束后可确认重试。'
       WHERE owner=$1 AND job_id=$2 AND segment_id=$3 AND attempt=$4 AND status='working'
       AND EXISTS(SELECT 1 FROM generation_claims WHERE owner=$1 AND attempt=$4)`, [claim.owner, claim.job.id, claim.segment.id, claim.attempt]);
     await settleJob(db, claim.owner, claim.job.id);
@@ -172,10 +190,29 @@ export async function retrySegment(jobId: string, segmentId: string, acknowledge
     if (!["uncertain", "error"].includes(item.status)) return;
     if (!acknowledge) throw new AppError("请确认可能重复计费", 409, "BILLING_ACK_REQUIRED");
     const active = await db.query("SELECT 1 FROM generation_claims WHERE owner=$1 AND attempt=$2 AND expires_at>now()", [owner, item.attempt]);
-    if (active.rows.length) throw new AppError("请等待十分钟，避免与未完成请求重叠", 409, "REQUEST_STILL_UNCERTAIN");
+    if (active.rows.length) throw new AppError("请等待当前请求结束，避免重复生成", 409, "REQUEST_STILL_UNCERTAIN");
     await db.query("DELETE FROM generation_claims WHERE owner=$1 AND attempt=$2", [owner, item.attempt]);
     await db.query("UPDATE job_items SET status='queued',attempt=NULL,error=NULL WHERE owner=$1 AND job_id=$2 AND segment_id=$3", [owner, jobId, segmentId]);
     await db.query("UPDATE segments SET desired_job=$3 WHERE owner=$1 AND id=$2", [owner, segmentId, jobId]);
     await db.query("UPDATE jobs SET status='queued',run_id=NULL,dispatch_after=now() WHERE owner=$1 AND id=$2", [owner, jobId]);
+  });
+}
+
+export async function requireJobProvider(jobId: string, owner: string) {
+  const { rows } = await database().query<ReadingJob>("SELECT * FROM jobs WHERE owner=$1 AND id=$2", [owner, jobId]);
+  if (!rows[0]) throw new AppError("找不到这个任务", 404);
+  const voice = await findVoice(rows[0].voice_id, owner);
+  providerReady(rows[0].synthesis?.provider || voice.provider);
+}
+export async function pendingGeneration(claim: Generation) {
+  await database().query("UPDATE generation_claims SET poll_after=now()+interval '5 seconds' WHERE owner=$1 AND attempt=$2", [claim.owner, claim.attempt]);
+}
+export async function failedGeneration(claim: Generation) {
+  await database().transaction(async (db) => {
+    await ownerLock(db, claim.owner);
+    await db.query(`UPDATE job_items SET status='error',error='IndexTTS 生成失败，请重试' WHERE owner=$1 AND job_id=$2 AND segment_id=$3 AND attempt=$4 AND status='working'`,
+      [claim.owner, claim.job.id, claim.segment.id, claim.attempt]);
+    await db.query("DELETE FROM generation_claims WHERE owner=$1 AND attempt=$2", [claim.owner, claim.attempt]);
+    await settleJob(db, claim.owner, claim.job.id);
   });
 }

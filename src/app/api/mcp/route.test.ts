@@ -25,12 +25,26 @@ it("uses the Streamable HTTP SDK and exposes accurate annotations", async () => 
   expect(body.result.tools[1].annotations).toMatchObject({ readOnlyHint: false, idempotentHint: true });
 });
 it("creates a saved queued session, returns stable absolute URL, and deduplicates retry", async () => {
+  vi.stubEnv("FISH_API_KEY", "synthetic-not-used-for-network");
   const params = { name: "create_reading", arguments: { text: "合成中文测试", title: "Synthetic", idempotency_key: "mcp-request" } };
   const one = await (await call("tools/call", params)).json();
   const two = await (await call("tools/call", params)).json();
   expect(one.result.structuredContent.status).toBe("queued");
   expect(one.result.structuredContent.url).toMatch(/^https:\/\/synthetic.test\/sessions\/doc_/);
   expect(two.result.structuredContent).toEqual(one.result.structuredContent);
+});
+it("lists voices without Fish but refuses generation before creating a job", async () => {
+  vi.stubEnv("FISH_API_KEY", "");
+  vi.stubEnv("FISH_AUDIO_API_KEY", "");
+  const voices = await (await call("tools/call", { name: "list_voices", arguments: {} })).json();
+  expect(voices.result.structuredContent.voices).toHaveLength(1);
+  const reading = await (await call("tools/call", { name: "create_reading", arguments: {
+    text: "无密钥测试", idempotency_key: "no-provider-key",
+  } })).json();
+  expect(reading.result.isError).toBe(true);
+  expect(reading.result.content[0].text).toContain("FISH_API_KEY");
+  expect((await fixture.db.query("SELECT * FROM jobs")).rows).toHaveLength(0);
+  expect((await fixture.db.query("SELECT * FROM documents")).rows).toHaveLength(0);
 });
 it("enforces write scope at the tool invocation, not just at transport auth", async () => {
   mocks.scopes = ["read:voices"];

@@ -152,6 +152,9 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .time-control { display: grid; grid-template-columns: 30px 1fr 30px; align-items: center; gap: 8px; color: #a8c3b5; font-size: 9px; text-align: center; }
 .time-control input[type="range"] { --range-progress: 0%; height: 3px; background: rgba(255,255,255,.24); }
 .time-control input[type="range"]::-webkit-slider-thumb { background: white; border-color: var(--green-dark); }
+.player-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 11px; white-space: nowrap; }
+.loop-toggle { display: inline-flex; align-items: center; gap: 5px; color: #c5d9ce; }
+.loop-toggle input { accent-color: #72bf92; }
 
 .spinner { display: inline-block; width: 19px; height: 19px; border: 2px solid rgba(30,101,75,.25); border-top-color: var(--green); border-radius: 50%; animation: spin .75s linear infinite; }.spinner.light { border-color: rgba(255,255,255,.28); border-top-color: white; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -217,6 +220,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   .transport { grid-row: 1; grid-column: 2; }
   .transport button:not(.transport-main) { width: 30px; }
   .time-control { grid-column: 1 / -1; grid-row: 2; }
+  .player-actions { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; }
   .voice-modal { padding: 27px 20px 22px; border-radius: 20px; }
   .record-zone { grid-template-columns: auto 1fr; }.file-pill { grid-column: 1 / -1; text-align: center; }
 }

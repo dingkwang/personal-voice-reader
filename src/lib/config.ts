@@ -32,13 +32,28 @@ export function validateCloudEnvironment() {
     "DEFAULT_VOICE_ID", "CRON_SECRET"]) required(name);
   appOrigin();
   issuer();
-  if (!process.env.FISH_API_KEY && !process.env.FISH_AUDIO_API_KEY) required("FISH_API_KEY");
+  // Fish is intentionally NOT required here: preview/development run without a
+  // Fish key. Generation paths must call fishApiKey() at their own boundary.
   if (!/^[a-f0-9]{64}$/i.test(required("AUTH0_SECRET")) ||
     process.env.APP_ENV !== process.env.RESOURCE_ENV ||
     (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== process.env.APP_ENV)) {
     throw new AppError("环境隔离配置不匹配", 503, "INVALID_CONFIGURATION");
   }
   if (process.env.VERCEL && process.env.TEST_MODE) throw new AppError("线上禁止测试模式", 503);
+}
+
+// Operation boundary for every Fish-backed capability (TTS, cloning, recovery).
+// Fails closed so a no-Fish environment never reaches the provider.
+export function fishApiKey(): string {
+  const key = process.env.FISH_API_KEY || process.env.FISH_AUDIO_API_KEY;
+  if (!key) {
+    throw new AppError(
+      "尚未配置 FISH_API_KEY，请先在环境文件中添加 Fish Audio API key",
+      503,
+      "PROVIDER_NOT_CONFIGURED",
+    );
+  }
+  return key;
 }
 
 export async function validateResourceIdentity() {

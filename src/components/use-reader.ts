@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { DocumentSummary, JobStatus, PublicDocument, Segment, Voice } from "@/lib/types";
+import { encodePcmWav } from "@/lib/wav";
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
@@ -23,11 +24,14 @@ export function useReader(initialSessionId?: string) {
   const [isSaving, setIsSaving] = useState(false);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
+  const defaultVoiceRef = useRef("");
   const [speed, setSpeed] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
   const [time, setTime] = useState({ current: 0, duration: 0 });
+  const [totalDuration, setTotalDuration] = useState(0);
+  const [loopAll, setLoopAll] = useState(false);
   const [message, setMessage] = useState("");
   const [voiceError, setVoiceError] = useState("");
   const [job, setJob] = useState<JobStatus | null>(null);
@@ -53,6 +57,9 @@ export function useReader(initialSessionId?: string) {
   const jobRef = useRef<JobStatus | null>(null);
   const eventsRef = useRef<EventSource | null>(null);
   const prefetchRef = useRef<HTMLAudioElement[]>([]);
+  const durationRef = useRef(new Map<string, number>());
+  const loopRef = useRef(false);
+  const endedRef = useRef(false);
 
   const detachAudio = useCallback(() => {
     for (const item of prefetchRef.current) { item.removeAttribute("src"); item.load(); }
@@ -78,6 +85,9 @@ export function useReader(initialSessionId?: string) {
     setIsPlaying(false);
     setIsPreparing(false);
     setTime({ current: 0, duration: 0 });
+    durationRef.current.clear();
+    setTotalDuration(0);
+    endedRef.current = false;
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = null;
       navigator.mediaSession.playbackState = "none";
@@ -150,12 +160,13 @@ export function useReader(initialSessionId?: string) {
     let cancelled = false;
     void loadHistory();
     openInitial();
-    api<{ voices: Voice[] }>("/api/voices")
-      .then(({ voices: items }) => {
+    api<{ voices: Voice[]; defaultVoiceId?: string }>("/api/voices")
+      .then(({ voices: items, defaultVoiceId }) => {
         if (cancelled) return;
         setVoices(items);
+        defaultVoiceRef.current = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
         if (!settingsRef.current.voiceId) {
-          const id = items[0]?.id || "";
+          const id = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
           settingsRef.current.voiceId = id;
           setVoiceId(id);
         }
@@ -290,6 +301,7 @@ export function useReader(initialSessionId?: string) {
     setSource(emptyDraft);
     setActiveIndex(0);
     setMessage("");
+    if (defaultVoiceRef.current) changeSettings({ voiceId: defaultVoiceRef.current, speed: 1 });
     window.history.replaceState(null, "", "/");
   }
 
@@ -401,6 +413,7 @@ export function useReader(initialSessionId?: string) {
     setIsPreparing(true);
     setIsPlaying(false);
     setTime({ current: 0, duration: 0 });
+    endedRef.current = false;
     setMessage("");
     indexRef.current = index;
     setActiveIndex(index);
@@ -413,7 +426,12 @@ export function useReader(initialSessionId?: string) {
       const audio = new Audio(ready.audioUrl);
       audioRef.current = audio;
       const syncTime = () => {
-        if (valid()) setTime({ current: audio.currentTime, duration: Number.isFinite(audio.duration) ? audio.duration : 0 });
+        const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+        if (duration > 0) {
+          durationRef.current.set(segment.id, duration);
+          setTotalDuration([...durationRef.current.values()].reduce((sum, value) => sum + value, 0));
+        }
+        if (valid()) setTime({ current: audio.currentTime, duration });
       };
       audio.ontimeupdate = audio.onloadedmetadata = syncTime;
       audio.onplay = () => { if (valid()) setIsPlaying(true); };
@@ -428,6 +446,8 @@ export function useReader(initialSessionId?: string) {
         if (!valid()) return;
         setIsPlaying(false);
         if (index < current.segments.length - 1) void playSegment(index + 1);
+        else if (loopRef.current) void playSegment(0);
+        else endedRef.current = true;
       };
       if ("mediaSession" in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -460,7 +480,7 @@ export function useReader(initialSessionId?: string) {
       return;
     }
     const generation = generationRef.current;
-    if (audio) {
+    if (audio && !endedRef.current) {
       const request = playRef.current;
       preparingRef.current = true;
       setIsPreparing(true);
@@ -477,7 +497,7 @@ export function useReader(initialSessionId?: string) {
       return;
     }
     const saved = await saveDocument();
-    if (saved && generation === generationRef.current) await loadSegment(indexRef.current);
+    if (saved && generation === generationRef.current) await loadSegment(endedRef.current ? 0 : indexRef.current);
   }
 
   const goPrevious = useCallback(() => {
@@ -524,6 +544,7 @@ export function useReader(initialSessionId?: string) {
   }
 
   function addVoice(voice: Voice) {
+    if (voice.provider === "indextts") defaultVoiceRef.current = voice.id;
     setVoices((items) => [...items, voice]);
     setVoiceError("");
     changeSettings({ ...settingsRef.current, voiceId: voice.id });
@@ -536,9 +557,65 @@ export function useReader(initialSessionId?: string) {
     setTime({ current: seconds, duration: audio.duration });
   }
 
+  function toggleLoop() {
+    loopRef.current = !loopRef.current;
+    setLoopAll(loopRef.current);
+  }
+
+  async function downloadDocument() {
+    const current = documentRef.current;
+    if (!current) return;
+    if (!current.segments.every((segment) => segment.status === "ready" && segment.audioUrl)) {
+      setMessage("请等待整篇音频准备完成后再下载");
+      return;
+    }
+    try {
+      const context = new AudioContext();
+      const decoded: AudioBuffer[] = [];
+      let frames = 0;
+      for (const segment of current.segments) {
+        const response = await fetch(segment.audioUrl!, { cache: "no-store" });
+        if (!response.ok) throw new Error("音频下载失败");
+        const buffer = await context.decodeAudioData(await response.arrayBuffer());
+        decoded.push(buffer);
+        frames += Math.ceil(buffer.duration * 24_000);
+        if (44 + frames * 2 > 256 * 1024 * 1024) throw new Error("整篇音频超过 256 MiB，暂不支持导出");
+      }
+      const rendered = new OfflineAudioContext(1, frames, 24_000);
+      let offset = 0;
+      for (const buffer of decoded) {
+        const source = rendered.createBufferSource();
+        source.buffer = buffer;
+        source.connect(rendered.destination);
+        source.start(offset);
+        offset += buffer.duration;
+      }
+      const output = await rendered.startRendering();
+      const blob = encodePcmWav(output.getChannelData(0), 24_000);
+      const url = URL.createObjectURL(blob);
+      const link = globalThis.document.createElement("a");
+      link.href = url;
+      link.download = `${(current.title || "声笺朗读").replace(/[\\/:*?"<>|]/g, "_")}.wav`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await context.close();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "整篇音频导出失败，请重试");
+    }
+  }
+
+  async function makeWebDefault() {
+    const selected = settingsRef.current.voiceId;
+    try {
+      const result = await api<{ defaultVoiceId: string }>("/api/voices", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: selected }) });
+      defaultVoiceRef.current = result.defaultVoiceId;
+      setMessage("已设为网页默认声音");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "设置失败"); }
+  }
+
   async function retryFailed(segmentId: string) {
     const current = jobRef.current;
-    if (!current || !window.confirm("之前的请求可能已计费。确认再次生成这一段？不确定的请求需等待十分钟。")) return;
+    if (!current || !window.confirm("之前的请求可能已计费。确认再次生成这一段？不确定的请求需等待当前任务结束。")) return;
     const generation = generationRef.current;
     try {
       const { job: next } = await api<{ job: JobStatus }>(`/api/jobs/${current.id}`, {
@@ -555,8 +632,8 @@ export function useReader(initialSessionId?: string) {
     ...draft, document, history, historyLoading, historyError, refreshHistory,
     loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
     voices, voiceId, speed, changeSettings, addVoice, voiceError,
-    activeIndex, isPlaying, isPreparing, time, message, setMessage,
+    activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
-    job, retryFailed,
+    job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,
   };
 }

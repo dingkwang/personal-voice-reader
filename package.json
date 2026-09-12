@@ -13,7 +13,8 @@
     "data:backup": "node scripts/backup.mjs",
     "data:import": "tsx scripts/import-legacy.ts",
     "deploy:check": "tsx scripts/deploy-check.ts",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:service": "node scripts/test-indextts.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.29.0",
