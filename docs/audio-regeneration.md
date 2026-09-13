@@ -1,9 +1,9 @@
 # Audio regeneration
 
-Open **更多** in the player. Choose **重新生成当前段落** or **重新生成整篇**.
+The player directly shows **重新生成当前段落** and **重新生成整篇**.
 “Current” means the selected playback segment, not the text cursor.
 Confirm the scope, saved voice, speed, and new generation charges.
-Opening the menu or canceling the confirmation does not submit anything.
+Showing the controls or canceling the confirmation does not submit anything.
 
 Save or restore text/title edits first. Restore any changed voice or speed.
 Wait for unfinished requests. Resolve uncertain requests through the existing

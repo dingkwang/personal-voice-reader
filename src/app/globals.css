@@ -152,16 +152,14 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .time-control { display: grid; grid-template-columns: 30px 1fr 30px; align-items: center; gap: 8px; color: #a8c3b5; font-size: 9px; text-align: center; }
 .time-control input[type="range"] { --range-progress: 0%; height: 3px; background: rgba(255,255,255,.24); }
 .time-control input[type="range"]::-webkit-slider-thumb { background: white; border-color: var(--green-dark); }
-.player-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 11px; white-space: nowrap; }
+.player-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 16px; padding-bottom: 8px; font-size: 11px; }
+.player-actions > button, .player-actions > label { min-height: 44px; white-space: nowrap; }
+.player-actions > p { flex-basis: 100%; margin: 0; color: #c5d9ce; line-height: 1.5; }
+.regeneration-actions { display: flex; align-items: center; gap: 32px; }
+.regeneration-actions > button { min-height: 44px; white-space: nowrap; }
 .player-actions .text-button { color: inherit; }
 .player-bar { overflow: visible; }
 .player-progress-track { overflow: hidden; border-radius: 17px 17px 0 0; }
-.player-more { position: relative; }
-.player-more summary { cursor: pointer; padding: 12px 4px; }
-.player-more-menu { position: absolute; right: 0; bottom: calc(100% + 12px); width: min(280px, calc(100vw - 50px)); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--green); box-shadow: 0 8px 35px #0003; white-space: normal; }
-.player-more-menu button { display: block; width: 100%; min-height: 44px; padding: 10px; text-align: left; border: 0; border-radius: 7px; background: transparent; color: inherit; font-size: 13px; }
-.player-more-menu button:hover:not(:disabled) { background: #eff5f0; }
-.player-more-menu p { margin: 8px 10px; color: #65716a; font-size: 12px; line-height: 1.6; }
 .loop-toggle { display: inline-flex; align-items: center; gap: 5px; color: #c5d9ce; }
 .loop-toggle input { accent-color: #72bf92; }
 
@@ -230,6 +228,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   .transport button:not(.transport-main) { width: 30px; }
   .time-control { grid-column: 1 / -1; grid-row: 2; }
   .player-actions { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; }
+  .regeneration-actions { width: 100%; justify-content: space-between; }
   .voice-modal { padding: 27px 20px 22px; border-radius: 20px; }
   .record-zone { grid-template-columns: auto 1fr; }.file-pill { grid-column: 1 / -1; text-align: center; }
 }

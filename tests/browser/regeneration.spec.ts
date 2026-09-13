@@ -63,9 +63,13 @@ for (const width of [1440, 390]) {
       if (request.url().endsWith("/regenerate") && request.method() === "POST") posts.push(request.postDataJSON());
     });
     await page.screenshot({ path: `.evidence/browser/${width}-regeneration-default.png`, fullPage: true });
-    await page.getByText("更多", { exact: true }).click();
     const single = page.getByRole("button", { name: "重新生成当前段落", exact: true });
     const whole = page.getByRole("button", { name: "重新生成整篇", exact: true });
+    await expect(single).toBeVisible();
+    await expect(whole).toBeVisible();
+    const singleBox = await single.boundingBox();
+    const wholeBox = await whole.boundingBox();
+    expect(wholeBox!.x - singleBox!.x - singleBox!.width).toBeGreaterThanOrEqual(32);
     await expect(single).toBeEnabled();
     await page.screenshot({ path: `.evidence/browser/${width}-regeneration-menu.png`, fullPage: true });
     expect(posts).toHaveLength(0);
@@ -136,7 +140,6 @@ for (const width of [1440, 390]) {
       if (lose) { lose = false; await route.abort("failed"); }
       else await route.fulfill({ response });
     });
-    await page.getByText("更多", { exact: true }).click();
     page.once("dialog", (dialog) => { expect(dialog.message()).toContain("共 3 段"); return dialog.accept(); });
     await whole.click();
     await expect(page.getByRole("button", { name: "恢复原请求" })).toBeEnabled();

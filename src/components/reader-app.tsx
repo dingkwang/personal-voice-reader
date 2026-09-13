@@ -260,23 +260,13 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             <div className="player-actions">
               <label className="loop-toggle"><input type="checkbox" checked={loopAll} onChange={toggleLoop} />整篇循环</label>
               <button className="text-button" onClick={() => void downloadDocument()} disabled={!document || isPreparing}>下载整篇 WAV</button>
-              <details className="player-more" onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.currentTarget.open = false;
-                  event.currentTarget.querySelector("summary")?.focus();
-                }
-              }}>
-                <summary aria-label="更多播放操作">更多</summary>
-                <div className="player-more-menu">
-                  <button disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
-                    onClick={() => regenerate("segment")}>重新生成当前段落</button>
-                  <button disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
-                    onClick={() => regenerate("all")}>重新生成整篇</button>
-                  {regenerationDisabledReason
-                    ? <p id="regeneration-reason">{regenerationDisabledReason}</p>
-                    : <p>当前段落：第 {activeIndex + 1} 段。重新生成会产生新的费用，提交前需确认。</p>}
-                </div>
-              </details>
+              <div className="regeneration-actions" role="group" aria-label="重新生成音频">
+                <button className="text-button" disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
+                  onClick={() => regenerate("segment")}>重新生成当前段落</button>
+                <button className="text-button" disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
+                  onClick={() => regenerate("all")}>重新生成整篇</button>
+              </div>
+              {regenerationDisabledReason && <p id="regeneration-reason">{regenerationDisabledReason}</p>}
             </div>
           </div>
         </aside>
