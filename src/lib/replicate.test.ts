@@ -69,7 +69,7 @@ it("keeps references private and validates ownership", async () => {
   expect(mock.get).not.toHaveBeenCalled(); expect(mock.fetch).not.toHaveBeenCalled();
 });
 it("caps preview submissions and rejects untrusted result URLs", async () => {
-  await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) SELECT $1,'reserved-'||n FROM generate_series(1,6) n", [TEST_OWNER]);
+  await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) SELECT $1,'reserved-'||n FROM generate_series(1,100) n", [TEST_OWNER]);
   const blocked = await create(); await generateNext(blocked.jobId, TEST_OWNER);
   expect(mock.fetch).not.toHaveBeenCalled();
   expect((await readingStatus(blocked.jobId)).items[0].status).toBe("error");
