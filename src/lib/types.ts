@@ -51,6 +51,7 @@ export type ReadingJob = {
   synthesis?: SynthesisSettings | null;
 };
 export type JobStatus = ReadingJob & {
+  regeneration?: boolean;
   items: { segment_id: string; status: SegmentStatus; error: string | null; audioUrl: string | null }[];
   url: string;
 };

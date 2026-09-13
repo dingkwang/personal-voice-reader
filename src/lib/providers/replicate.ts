@@ -6,14 +6,13 @@ import { AppError } from "../errors";
 import { REPLICATE_MODEL, REPLICATE_VERSION, replicateToken } from "../tts-config";
 import { boundedBytes } from "./indextts";
 import type { Generation } from "../jobs";
+import { MAX_PREVIEW_ATTEMPTS } from "../replicate-quota";
 
 const prediction = z.object({ id: z.string().regex(/^[a-z0-9]+$/),
   status: z.enum(["starting", "processing", "succeeded", "failed", "canceled", "aborted"]),
   output: z.string().nullable().optional() });
 type Attempt = { prediction_id: string | null; status: string; deadline: Date };
 type Result = { status: "pending" | "error" | "uncertain" } | { status: "ready"; audio: ArrayBuffer };
-// Keep preview spend bounded while allowing a normal long article to finish.
-const MAX_PREVIEW_ATTEMPTS = 100;
 
 async function request(path: string, init?: RequestInit) {
   return fetch(`https://api.replicate.com/v1${path}`, { ...init,

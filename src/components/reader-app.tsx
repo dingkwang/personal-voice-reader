@@ -34,6 +34,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
     activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
     job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,
+    regenerate, regenerationDisabledReason, regenerating, pendingRegeneration, recoverRegeneration, recoveryDisabledReason,
   } = useReader(initialSessionId);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const editorDisabled = isSaving || Boolean(loadingId);
@@ -185,11 +186,17 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
         {voiceError && <div className="notice" role="alert">{voiceError}</div>}
         {job && <div className={`notice job-progress ${job.items.some((item) => ["error", "uncertain"].includes(item.status)) ? "needs-attention" : ""}`} role="status">
           <div>
-            <p>{job.status === "completed" ? "音频已就绪" : job.status === "attention" ? "部分段落需要处理" : "后台生成中，可以关闭页面，稍后回来继续听"} · {job.items.filter((item) => item.status === "ready").length}/{job.items.length}</p>
+            <p>{job.regeneration ? "重新生成 · " : ""}{job.status === "completed" ? "音频已就绪" : job.status === "attention" ? "部分段落需要处理" : "后台生成中，可以关闭页面，稍后回来继续听"} · {job.items.filter((item) => item.status === "ready").length}/{job.items.length}</p>
+            {job.regeneration && job.status !== "completed" && <p>已就绪的旧音频仍可播放和下载。新音频成功后才替换，不会自动播放。</p>}
             {job.items.filter((item) => ["error", "uncertain"].includes(item.status)).map((item) => (
               <p key={item.segment_id}>{item.error} <button className="text-button" onClick={() => void retryFailed(item.segment_id)}>重试第 {job.items.indexOf(item) + 1} 段</button></p>
             ))}
           </div>
+        </div>}
+        {pendingRegeneration && <div className="notice" role="status">
+          <p>上次重新生成的提交结果未确认。恢复原请求不会重复创建任务。</p>
+          {recoveryDisabledReason && <p>{recoveryDisabledReason}</p>}
+          <button className="text-button" disabled={regenerating || Boolean(recoveryDisabledReason)} onClick={recoverRegeneration}>恢复原请求</button>
         </div>}
         {message && <div className="notice" role={message === "已设为网页默认声音" ? "status" : "alert"}><span>{message === "已设为网页默认声音" ? "✓" : "!"}</span>{message}<button onClick={() => setMessage("")} aria-label="关闭"><CloseIcon size={16} /></button></div>}
 
@@ -253,6 +260,13 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             <div className="player-actions">
               <label className="loop-toggle"><input type="checkbox" checked={loopAll} onChange={toggleLoop} />整篇循环</label>
               <button className="text-button" onClick={() => void downloadDocument()} disabled={!document || isPreparing}>下载整篇 WAV</button>
+              <div className="regeneration-actions" role="group" aria-label="重新生成音频">
+                <button className="text-button" disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
+                  onClick={() => regenerate("segment")}>重新生成当前段落</button>
+                <button className="text-button" disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
+                  onClick={() => regenerate("all")}>重新生成整篇</button>
+              </div>
+              {regenerationDisabledReason && <p id="regeneration-reason">{regenerationDisabledReason}</p>}
             </div>
           </div>
         </aside>
