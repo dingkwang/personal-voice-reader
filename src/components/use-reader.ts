@@ -1,16 +1,32 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { DocumentSummary, JobStatus, PublicDocument, Segment, Voice } from "@/lib/types";
 import { encodePcmWav } from "@/lib/wav";
+import type { RegenerateInput } from "@/lib/jobs";
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
   const data = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(data.error || "请求失败，请稍后重试");
+  if (!response.ok) throw new ApiError(data.error || "请求失败，请稍后重试", response.status);
   return data;
 }
 
 type Draft = { text: string; title: string };
 const emptyDraft: Draft = { text: "", title: "" };
+const regenerationStorageKey = (id: string) => `voice-note:regeneration:v1:${id}`;
+function storedRegeneration(id: string): RegenerateInput | null {
+  const raw = localStorage.getItem(regenerationStorageKey(id));
+  if (!raw) return null;
+  const value = JSON.parse(raw) as RegenerateInput;
+  if (!["segment", "all"].includes(value.scope) || typeof value.idempotencyKey !== "string" ||
+    typeof value.voiceId !== "string" || typeof value.speed !== "number" || value.acknowledgeBilling !== true ||
+    !(value.sourceJobId === null || typeof value.sourceJobId === "string") ||
+    (value.scope === "segment" && typeof value.segmentId !== "string")) throw new Error("Invalid regeneration request");
+  return value;
+}
 
 export function useReader(initialSessionId?: string) {
   const [draft, setDraft] = useState(emptyDraft);
@@ -35,6 +51,15 @@ export function useReader(initialSessionId?: string) {
   const [message, setMessage] = useState("");
   const [voiceError, setVoiceError] = useState("");
   const [job, setJob] = useState<JobStatus | null>(null);
+  const [savedJob, setSavedJob] = useState<JobStatus | null>(null);
+  const [savedSettings, setSavedSettings] = useState<{ voiceId: string; speed: number } | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [pendingRegeneration, setPendingRegeneration] = useState<RegenerateInput | null>(null);
+  const [unfinishedRequest, setUnfinishedRequest] = useState(false);
+  const regenerateRef = useRef(false);
+  const savedJobRef = useRef<JobStatus | null>(null);
+  const savedSettingsRef = useRef<{ voiceId: string; speed: number } | null>(null);
+  const pendingRegenerationRef = useRef<RegenerateInput | null>(null);
 
   // Refs change in event handlers, not effects: even same-tick actions see
   // the new session/settings and cannot adopt an older async completion.
@@ -128,15 +153,34 @@ export function useReader(initialSessionId?: string) {
       settingsRef.current.voiceId !== next.voice_id || settingsRef.current.speed !== next.speed) return;
     jobRef.current = next;
     setJob(next);
+    savedJobRef.current = next;
+    setSavedJob(next);
+    savedSettingsRef.current = { voiceId: next.voice_id, speed: next.speed };
+    setSavedSettings(savedSettingsRef.current);
     const items = new Map(next.items.map((item) => [item.segment_id, item]));
     const updated = { ...current, segments: current.segments.map((segment) => {
       const item = items.get(segment.id);
+      // Progress is not playback state. Keep the selected version until its replacement is ready.
+      if (item?.status !== "ready" && segment.status === "ready" && segment.audioUrl &&
+        segment.voiceId === next.voice_id && segment.speed === next.speed) return segment;
+      if (item?.audioUrl !== segment.audioUrl && segment.audioUrl) durationRef.current.delete(segment.audioUrl);
       return item ? { ...segment, status: item.status, audioUrl: item.audioUrl,
         voiceId: next.voice_id, speed: next.speed } : segment;
     }) };
+    if (current.segments[indexRef.current]?.audioUrl &&
+      current.segments[indexRef.current]?.audioUrl !== updated.segments[indexRef.current]?.audioUrl) {
+      playRef.current++;
+      detachAudio();
+      preparingRef.current = false;
+      setIsPreparing(false);
+      setIsPlaying(false);
+      setTime({ current: 0, duration: 0 });
+      endedRef.current = false;
+    }
+    setTotalDuration([...durationRef.current.values()].reduce((sum, duration) => sum + duration, 0));
     documentRef.current = updated;
     setDocument(updated);
-  }, []);
+  }, [detachAudio]);
 
   const watchJob = useCallback((next: JobStatus, generation: number) => {
     if (generation !== generationRef.current) return;
@@ -232,6 +276,9 @@ export function useReader(initialSessionId?: string) {
     draftRef.current = next;
     setDraft(next);
     setMessage("");
+    if (next.text === sourceRef.current.text && next.title === sourceRef.current.title && savedJobRef.current) {
+      watchJob(savedJobRef.current, generationRef.current);
+    }
   }
 
   function changeSettings(next: { voiceId: string; speed: number }) {
@@ -240,6 +287,9 @@ export function useReader(initialSessionId?: string) {
     setVoiceId(next.voiceId);
     setSpeed(next.speed);
     setMessage("");
+    if (savedJobRef.current?.voice_id === next.voiceId && savedJobRef.current.speed === next.speed) {
+      watchJob(savedJobRef.current, generationRef.current);
+    }
   }
 
   async function selectSession(id: string) {
@@ -267,6 +317,21 @@ export function useReader(initialSessionId?: string) {
       const ready = loaded.segments.find((segment) =>
         segment.status === "ready" && segment.audioUrl && segment.voiceId && segment.speed !== null,
       );
+      savedJobRef.current = savedJob;
+      setSavedJob(savedJob);
+      savedSettingsRef.current = savedJob ? { voiceId: savedJob.voice_id, speed: savedJob.speed } :
+        ready ? { voiceId: ready.voiceId!, speed: ready.speed! } : null;
+      setSavedSettings(savedSettingsRef.current);
+      if (!inFlightRef.current.size) setUnfinishedRequest(false);
+      pendingRegenerationRef.current = null;
+      setPendingRegeneration(null);
+      try {
+        pendingRegenerationRef.current = storedRegeneration(loaded.id);
+        setPendingRegeneration(pendingRegenerationRef.current);
+      } catch {
+        setMessage("无法读取重新生成请求记录。请恢复浏览器存储后重新打开会话，避免重复计费。");
+        setUnfinishedRequest(true);
+      }
       if (ready) changeSettings({ voiceId: ready.voiceId!, speed: ready.speed! });
       if (savedJob) {
         changeSettings({ voiceId: savedJob.voice_id, speed: savedJob.speed });
@@ -292,6 +357,12 @@ export function useReader(initialSessionId?: string) {
     stopPlayback();
     loadingRef.current = null;
     documentRef.current = null;
+    savedJobRef.current = null;
+    savedSettingsRef.current = null;
+    pendingRegenerationRef.current = null;
+    setSavedJob(null);
+    setSavedSettings(null);
+    setPendingRegeneration(null);
     draftRef.current = sourceRef.current = emptyDraft;
     indexRef.current = 0;
     setLoadingId(null);
@@ -329,6 +400,12 @@ export function useReader(initialSessionId?: string) {
       if (session !== sessionRef.current) return null;
       const nextDraft = { text: current.text.trim(), title: saved.title };
       documentRef.current = saved;
+      savedJobRef.current = null;
+      savedSettingsRef.current = null;
+      pendingRegenerationRef.current = null;
+      setSavedJob(null);
+      setSavedSettings(null);
+      setPendingRegeneration(null);
       draftRef.current = sourceRef.current = nextDraft;
       setDocument(saved);
       window.history.replaceState(null, "", `/sessions/${saved.id}`);
@@ -364,19 +441,23 @@ export function useReader(initialSessionId?: string) {
   ): Promise<Segment> => {
     const current = documentRef.current;
     if (!current) throw new Error("会话已关闭");
-    if (current.segments.every((item) => item.status === "ready" && item.audioUrl &&
-      item.voiceId === settings.voiceId && item.speed === settings.speed)) return segment;
+    if (segment.status === "ready" && segment.audioUrl &&
+      segment.voiceId === settings.voiceId && segment.speed === settings.speed) return segment;
     const signature = `${generation}:${current.id}:${settings.voiceId}:${settings.speed}`;
     const matches = (value: JobStatus | null) => value?.document_id === current.id &&
       value.voice_id === settings.voiceId && value.speed === settings.speed;
     let pending = inFlightRef.current.get(signature);
     if (!pending) {
       if (!requestKeysRef.current.has(signature)) requestKeysRef.current.set(signature, crypto.randomUUID());
+      if (!matches(jobRef.current)) setUnfinishedRequest(true);
       pending = matches(jobRef.current) ? Promise.resolve(jobRef.current!) : api<{ job: JobStatus }>("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentId: current.id, ...settings, idempotencyKey: requestKeysRef.current.get(signature) }),
-      }).then(({ job: next }) => next);
+      }).then(({ job: next }) => { setUnfinishedRequest(false); return next; }, (error: unknown) => {
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) setUnfinishedRequest(false);
+        throw error;
+      });
       inFlightRef.current.set(signature, pending);
     }
     try {
@@ -426,9 +507,10 @@ export function useReader(initialSessionId?: string) {
       const audio = new Audio(ready.audioUrl);
       audioRef.current = audio;
       const syncTime = () => {
+        if (!valid()) return;
         const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
         if (duration > 0) {
-          durationRef.current.set(segment.id, duration);
+          durationRef.current.set(ready.audioUrl!, duration);
           setTotalDuration([...durationRef.current.values()].reduce((sum, value) => sum + value, 0));
         }
         if (valid()) setTime({ current: audio.currentTime, duration });
@@ -628,6 +710,83 @@ export function useReader(initialSessionId?: string) {
     }
   }
 
+  const regenerationDisabledReason = isSaving || loadingId ? "请等待会话保存或加载完成" :
+    isDirty ? "文字或标题有未保存的修改，请先保存或还原" :
+    !savedSettings ? "请先为当前会话生成音频" :
+    voiceId !== savedSettings.voiceId || speed !== savedSettings.speed ? "声音或语速与会话已保存设置不同，请先还原" :
+    regenerating ? "正在提交重新生成请求" :
+    pendingRegeneration ? "上次提交结果未确认，请恢复原请求，避免重复计费" :
+    unfinishedRequest || isPreparing || savedJob?.status === "queued" || savedJob?.status === "running" ||
+      savedJob?.items.some((item) => item.status === "uncertain" || item.status === "working" || item.status === "queued")
+      ? "存在未完成或结果不确定的请求，请先处理原任务" : "";
+  const recoveryDisabledReason = isSaving || loadingId ? "请等待会话保存或加载完成" :
+    isDirty ? "请先还原未保存的文字或标题，再恢复原请求" :
+    pendingRegeneration && (voiceId !== pendingRegeneration.voiceId || speed !== pendingRegeneration.speed)
+      ? "请先还原原请求的声音和语速，再恢复原请求" : "";
+
+  async function submitRegeneration(input: RegenerateInput) {
+    const current = documentRef.current;
+    if (!current || regenerateRef.current) return;
+    regenerateRef.current = true;
+    setRegenerating(true);
+    const session = sessionRef.current;
+    const generation = generationRef.current;
+    // Invalidate pending play promises, but keep the job subscription and old audio versions.
+    playRef.current++;
+    detachAudio();
+    preparingRef.current = false;
+    setIsPreparing(false);
+    setIsPlaying(false);
+    setTime({ current: 0, duration: 0 });
+    setMessage("");
+    try {
+      // Persist before sending. A lost HTTP response must never lead to a fresh paid request.
+      localStorage.setItem(regenerationStorageKey(current.id), JSON.stringify(input));
+      pendingRegenerationRef.current = input;
+      setPendingRegeneration(input);
+      const { job: next } = await api<{ job: JobStatus }>(`/api/documents/${current.id}/regenerate`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+      });
+      localStorage.removeItem(regenerationStorageKey(current.id));
+      if (session !== sessionRef.current || current.id !== documentRef.current?.id) return;
+      pendingRegenerationRef.current = null;
+      setPendingRegeneration(null);
+      watchJob(next, generation);
+    } catch (error) {
+      // Only a definite rejection permits a new operation. Network/5xx failures keep the key.
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        try {
+          localStorage.removeItem(regenerationStorageKey(current.id));
+          if (current.id === documentRef.current?.id) {
+            pendingRegenerationRef.current = null;
+            setPendingRegeneration(null);
+          }
+        } catch { /* Retain the request if browser storage becomes unavailable. */ }
+      }
+      if (session === sessionRef.current) setMessage(error instanceof Error ? error.message : "提交结果未确认，请恢复原请求");
+    } finally {
+      regenerateRef.current = false;
+      setRegenerating(false);
+    }
+  }
+
+  function regenerate(scope: "segment" | "all") {
+    const current = documentRef.current;
+    if (!current || regenerateRef.current || regenerationDisabledReason || pendingRegenerationRef.current) return;
+    const settings = savedSettingsRef.current;
+    if (!settings || settings.voiceId !== settingsRef.current.voiceId || settings.speed !== settingsRef.current.speed) return;
+    const segment = current.segments[indexRef.current];
+    if (!segment) return;
+    const voiceName = voices.find((voice) => voice.id === settings.voiceId)?.name || "会话已保存的声音";
+    if (!window.confirm(`${scope === "segment" ? `重新生成当前段落（第 ${indexRef.current + 1} 段）` : `重新生成整篇（共 ${current.segments.length} 段）`}？\n声音：${voiceName} · ${settings.speed}×\n将发起新的语音生成并产生新的费用，不使用旧缓存。成功前保留旧音频，完成后不会自动播放。`)) return;
+    void submitRegeneration({ scope, ...(scope === "segment" ? { segmentId: segment.id } : {}),
+      sourceJobId: savedJobRef.current?.id || null, ...settings, idempotencyKey: crypto.randomUUID(), acknowledgeBilling: true });
+  }
+
+  function recoverRegeneration() {
+    if (!recoveryDisabledReason && pendingRegenerationRef.current) void submitRegeneration(pendingRegenerationRef.current);
+  }
+
   return {
     ...draft, document, history, historyLoading, historyError, refreshHistory,
     loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
@@ -635,5 +794,6 @@ export function useReader(initialSessionId?: string) {
     activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
     job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,
+    regenerate, regenerationDisabledReason, regenerating, pendingRegeneration, recoverRegeneration, recoveryDisabledReason,
   };
 }

@@ -153,6 +153,15 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .time-control input[type="range"] { --range-progress: 0%; height: 3px; background: rgba(255,255,255,.24); }
 .time-control input[type="range"]::-webkit-slider-thumb { background: white; border-color: var(--green-dark); }
 .player-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 11px; white-space: nowrap; }
+.player-actions .text-button { color: inherit; }
+.player-bar { overflow: visible; }
+.player-progress-track { overflow: hidden; border-radius: 17px 17px 0 0; }
+.player-more { position: relative; }
+.player-more summary { cursor: pointer; padding: 12px 4px; }
+.player-more-menu { position: absolute; right: 0; bottom: calc(100% + 12px); width: min(280px, calc(100vw - 50px)); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--green); box-shadow: 0 8px 35px #0003; white-space: normal; }
+.player-more-menu button { display: block; width: 100%; min-height: 44px; padding: 10px; text-align: left; border: 0; border-radius: 7px; background: transparent; color: inherit; font-size: 13px; }
+.player-more-menu button:hover:not(:disabled) { background: #eff5f0; }
+.player-more-menu p { margin: 8px 10px; color: #65716a; font-size: 12px; line-height: 1.6; }
 .loop-toggle { display: inline-flex; align-items: center; gap: 5px; color: #c5d9ce; }
 .loop-toggle input { accent-color: #72bf92; }
 

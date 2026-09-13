@@ -27,8 +27,11 @@ Creation is reserved in PostgreSQL before the paid POST. Its returned prediction
 ID is persisted. Poll failures retry that ID. A lost creation reply is uncertain
 and never automatically resubmitted. Owner claims expire after 30 minutes.
 Each prediction has a five-minute provider cancellation deadline. Preview permits
-six lifetime submitted attempts per owner. This is a smoke-test guard, not a
-production quota. Keep total live testing below $5, including direct smoke calls.
+100 lifetime submitted attempts per owner. This is a Preview guard, not a
+production quota. Enqueue and retry preflight include outstanding queued
+reservations. See [audio regeneration](audio-regeneration.md) for explicit
+regeneration, billing confirmation, version preservation, and request recovery.
+Keep total live testing below $5, including direct smoke calls.
 
 Output is downloaded immediately into private Blob. WAV and MP3 retain the correct
 extension and MIME. Range requests support seeking. Cache keys include provider,

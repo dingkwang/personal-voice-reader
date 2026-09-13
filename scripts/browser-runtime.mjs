@@ -4,6 +4,8 @@ import { MockAgent, setGlobalDispatcher } from "undici";
 if (process.env.VERCEL || !process.env.BROWSER_TEST_AUDIO || !process.env.BROWSER_TEST_LOG) throw new Error("Isolated browser harness only");
 const original = globalThis.fetch;
 const indexRequests = new Map();
+const submissionsByText = new Map();
+const failedPredictions = new Set();
 const mp3 = await readFile(process.env.BROWSER_TEST_AUDIO);
 const network = new MockAgent();
 network.disableNetConnect();
@@ -36,12 +38,16 @@ globalThis.fetch = async function(input, init) {
     if (new Headers(init?.headers).get("Authorization") !== "Bearer synthetic-replicate") return new Response(null, { status: 401 });
     if (init?.method === "POST") {
       const id = `synthetic${indexRequests.size}`;
+      const text = JSON.parse(init.body).input.text;
+      const count = (submissionsByText.get(text) || 0) + 1;
+      submissionsByText.set(text, count);
+      if (text.includes("[[synthetic-regeneration-failure]]") && count > 1) failedPredictions.add(id);
       indexRequests.set(id, Date.now());
       await appendFile(process.env.BROWSER_TEST_LOG, "mock-replicate-start\n");
       return Response.json({ id, status: "starting" });
     }
     const id = url.pathname.split("/").at(-1);
-    return Response.json({ id, status: Date.now() - indexRequests.get(id) > 5500 ? "succeeded" : "processing", output: "https://replicate.delivery/synthetic.mp3" });
+    return Response.json({ id, status: Date.now() - indexRequests.get(id) > 5500 ? failedPredictions.has(id) ? "failed" : "succeeded" : "processing", output: "https://replicate.delivery/synthetic.mp3" });
   }
   if (url.hostname === "replicate.delivery") return new Response(mp3, { headers: { "Content-Type": "audio/mpeg" } });
   if (url.hostname === "synthetic.modal.run") {
