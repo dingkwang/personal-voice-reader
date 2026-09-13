@@ -12,6 +12,8 @@ const prediction = z.object({ id: z.string().regex(/^[a-z0-9]+$/),
   output: z.string().nullable().optional() });
 type Attempt = { prediction_id: string | null; status: string; deadline: Date };
 type Result = { status: "pending" | "error" | "uncertain" } | { status: "ready"; audio: ArrayBuffer };
+// Keep preview spend bounded while allowing a normal long article to finish.
+const MAX_PREVIEW_ATTEMPTS = 100;
 
 async function request(path: string, init?: RequestInit) {
   return fetch(`https://api.replicate.com/v1${path}`, { ...init,
@@ -39,7 +41,7 @@ export class ReplicateProvider {
         if (existing.rows.length) return false;
         const count = await tx.query<{ count: string }>("SELECT count(*) FROM replicate_requests WHERE owner=$1", [claim.owner]);
         // Preview guard. The separate initial smoke prediction also counts toward the $5 budget.
-        if (Number(count.rows[0].count) >= 6) throw new AppError("本轮生成额度已用完", 422);
+        if (Number(count.rows[0].count) >= MAX_PREVIEW_ATTEMPTS) throw new AppError("预览生成额度已用完", 422);
         await tx.query("INSERT INTO replicate_requests(owner,attempt) VALUES($1,$2)", [claim.owner, claim.attempt]);
         return true;
       });
