@@ -449,7 +449,10 @@ verified production release, the intended MCP URL is
 3. URL: `https://<stable-host>/api/mcp`; authentication: OAuth, with the manually
    registered ChatGPT client credentials above. Do not choose No Authentication.
 4. Sign in as Dingkang and approve the three scopes.
-5. Confirm tools: `list_voices`, `create_reading`, `get_reading_status`.
+5. Confirm tools: `list_voices`, `create_reading`, `get_reading_status`,
+   `regenerate_segment`, and `regenerate_reading`.
+   Regeneration requires explicit user confirmation because it can incur provider
+   charges. Reuse the same `idempotency_key` when retrying one request.
 6. Ask: “请用声笺把这段最终中文保存并朗读，返回链接。”
    Approve the create tool's write action. The returned link opens the private
    phone-friendly reader; there is no embedded ChatGPT player.
