@@ -15,7 +15,12 @@ Preview staging tenant：`icfg-jorzt9ixausuonnolw8s5hvd-staging`
 应用列表：
 https://manage.auth0.com/dashboard/us/icfg-jorzt9ixausuonnolw8s5hvd-staging/applications
 
+ChatGPT OAuth 应用名称：`voice-note-chatgpt-preview`
+
 ChatGPT OAuth Client ID：`3EeI3RgkslActTjSWGaUZ9SbGPSIhZ5X`
+
+不要选择 `voice-note-preview`（网页登录客户端）或
+`voice-note-api-preview`（Machine to Machine 客户端）。
 
 进入该应用的 `Credentials → Client Secrets` 获取 secret。Secret 只填入
 ChatGPT，不要写入仓库。
