@@ -31,7 +31,7 @@ button, input, textarea, select { font: inherit; }
 button, select, input[type="range"] { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.42; }
 
-.app-shell { min-height: 100vh; padding-bottom: 138px; }
+.app-shell { min-height: 100vh; padding-bottom: 220px; }
 
 .site-header {
   height: 76px;
@@ -195,7 +195,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 }
 
 @media (max-width: 760px) {
-  .app-shell { padding-bottom: 178px; }
+  html { scroll-padding-bottom: 320px; }
+  .app-shell { padding-bottom: 320px; }
   .site-header { height: 65px; padding: 0 18px; }
   .brand small, .private-chip { display: none; }
   .session-layout { width: min(100% - 28px, 560px); grid-template-columns: 1fr; margin-top: 10px; gap: 22px; }
