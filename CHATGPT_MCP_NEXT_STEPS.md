@@ -5,6 +5,21 @@
 - `regenerate_segment`：重新生成一个段落。
 - `regenerate_reading`：重新生成整篇。
 
+## Auth0 配置入口
+
+Auth0 团队入口：
+https://accounts.auth0.com/teams/team-z5etssb/tenants
+
+Preview staging tenant：`icfg-jorzt9ixausuonnolw8s5hvd-staging`
+
+应用列表：
+https://manage.auth0.com/dashboard/us/icfg-jorzt9ixausuonnolw8s5hvd-staging/applications
+
+ChatGPT OAuth Client ID：`3EeI3RgkslActTjSWGaUZ9SbGPSIhZ5X`
+
+进入该应用的 `Credentials → Client Secrets` 获取 secret。Secret 只填入
+ChatGPT，不要写入仓库。
+
 两个工具都需要 `create:readings` 权限。调用时必须传入
 `acknowledge_billing: true`。重试同一个请求时复用 `idempotency_key`。
 
