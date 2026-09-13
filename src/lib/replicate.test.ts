@@ -130,14 +130,30 @@ it("rejects whole regeneration before enqueue when only some of its submissions 
     ? new Response(raw) : Response.json({ id: "synthetic1", status: "succeeded", output: "https://replicate.delivery/test.wav" }));
   const source = await createReading({ text: "第一段测试。\n\n第二段测试。", voice_id: "voice_replicate", speed: 1, idempotency_key: "quota-whole-source" });
   for (let i = 0; i < 2; i++) await generateNext(source.jobId, TEST_OWNER);
-  await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) SELECT $1,'reserved-'||n FROM generate_series(1,97) n", [TEST_OWNER]);
+  mock.fetch.mockImplementation(async () => Response.json({ id: "synthetic1", status: "failed" }));
+  const failed = await create();
+  await generateNext(failed.jobId, TEST_OWNER);
+  await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) SELECT $1,'reserved-'||n FROM generate_series(1,96) n", [TEST_OWNER]);
   await expect(regenerateDocument(source.documentId, { scope: "all", sourceJobId: source.jobId, voiceId: "voice_replicate",
     speed: 1, acknowledgeBilling: true, idempotencyKey: "quota-whole" }, TEST_OWNER)).rejects.toMatchObject({ code: "QUOTA_EXCEEDED" });
-  expect((await fixture.db.query("SELECT * FROM jobs")).rows).toHaveLength(1);
-  const status = await readingStatus(source.jobId);
-  await fixture.db.query("UPDATE job_items SET status='error' WHERE segment_id=$1", [status.items[0].segment_id]);
+  expect((await fixture.db.query("SELECT * FROM jobs")).rows).toHaveLength(2);
+  const status = await readingStatus(failed.jobId);
   await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) VALUES($1,'last-used')", [TEST_OWNER]);
-  await expect(retrySegment(source.jobId, status.items[0].segment_id, true, TEST_OWNER)).rejects.toMatchObject({ code: "QUOTA_EXCEEDED" });
+  await expect(retrySegment(failed.jobId, status.items[0].segment_id, true, TEST_OWNER)).rejects.toMatchObject({ code: "QUOTA_EXCEEDED" });
+});
+it("allows a retry to reuse cache at the cap without reserving another paid submission", async () => {
+  mock.fetch.mockImplementation(async () => Response.json({ id: "synthetic1", status: "failed" }));
+  const failed = await create();
+  await generateNext(failed.jobId, TEST_OWNER);
+  mock.fetch.mockImplementation(async (url: string | URL) => String(url).includes("replicate.delivery")
+    ? new Response(raw) : Response.json({ id: "synthetic1", status: "succeeded", output: "https://replicate.delivery/test.wav" }));
+  const cached = await create();
+  await generateNext(cached.jobId, TEST_OWNER);
+  await fixture.db.query("INSERT INTO replicate_requests(owner,attempt) SELECT $1,'reserved-'||n FROM generate_series(1,98) n", [TEST_OWNER]);
+  await retrySegment(failed.jobId, (await readingStatus(failed.jobId)).items[0].segment_id, true, TEST_OWNER);
+  expect(await generateNext(failed.jobId, TEST_OWNER)).toBe("done");
+  expect(mock.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(2);
+  expect((await readingStatus(failed.jobId)).status).toBe("completed");
 });
 it("streams WAV ranges with the correct MIME", async () => {
   mock.get.mockResolvedValue({ stream: new Response(raw.subarray(1, 10)).body, headers: new Headers({ "content-range": `bytes 1-9/${raw.length}` }) });

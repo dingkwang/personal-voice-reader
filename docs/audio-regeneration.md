@@ -60,7 +60,8 @@ Insufficient Preview capacity returns `422` with `QUOTA_EXCEEDED`, before commit
   two provider slots, and cancellation/uncertainty deadlines are unchanged.
 - Old version mappings, cache entries, and audio objects are not deleted.
   Only the still-selected task can update the segment's playable version.
-  Superseded failed tasks cannot be retried over newer audio.
+  Explicit retries can resolve superseded tasks but cannot reselect them over
+  newer audio. Cached retries do not reserve another paid submission.
 - Ordinary playback reuses selected regenerated keys for matching synthesis
   settings rather than restoring base cache keys.
 - Client progress preserves ready audio. Changed URLs invalidate old duration

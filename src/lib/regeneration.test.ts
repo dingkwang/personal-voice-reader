@@ -133,7 +133,7 @@ it("does not let late regenerated audio replace a newer settings selection", asy
   await completeGeneration(claim, { objectHash: sha256("late"), pathname: "audio/late", size: 4 });
   expect((await findDocument(source.documentId)).segments.every((segment) => segment.speed === 1.2)).toBe(true);
 });
-it("rejects retries of superseded failed tasks and single regeneration with missing untouched audio", async () => {
+it("keeps superseded retries from selecting old audio and rejects single regeneration with missing untouched audio", async () => {
   const source = await createReading({ text: "第一段合成。\n\n第二段合成。", speed: 1, idempotency_key: "partial-source" });
   const claim = await claimNext(source.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
@@ -145,7 +145,10 @@ it("rejects retries of superseded failed tasks and single regeneration with miss
     .rejects.toMatchObject({ code: "AUDIO_NOT_READY" });
   const next = await regenerateDocument(source.documentId, input(source.jobId), TEST_OWNER);
   for (let i = 0; i < 2; i++) await generateNext(next.jobId, TEST_OWNER);
-  await expect(retrySegment(source.jobId, claim.segment.id, true, TEST_OWNER)).rejects.toMatchObject({ code: "SETTINGS_CONFLICT" });
+  const selected = (await findDocument(source.documentId)).segments.map((item) => item.audioUrl);
+  await retrySegment(source.jobId, claim.segment.id, true, TEST_OWNER);
+  await generateNext(source.jobId, TEST_OWNER);
+  expect((await findDocument(source.documentId)).segments.map((item) => item.audioUrl)).toEqual(selected);
 });
 it("supports legacy Fish sessions without a job and validates explicit scope and billing acknowledgement", async () => {
   const source = await ready();

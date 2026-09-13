@@ -282,8 +282,6 @@ export async function retrySegment(jobId: string, segmentId: string, acknowledge
     if (!item) throw new AppError("找不到这个任务段落", 404);
     if (!["uncertain", "error"].includes(item.status)) return;
     if (!acknowledge) throw new AppError("请确认可能重复计费", 409, "BILLING_ACK_REQUIRED");
-    const selected = await db.query("SELECT 1 FROM segments WHERE owner=$1 AND id=$2 AND desired_job=$3", [owner, segmentId, jobId]);
-    if (!selected.rows.length) throw new AppError("此任务已被新任务替代，请重新打开会话", 409, "SETTINGS_CONFLICT");
     const active = await db.query("SELECT 1 FROM generation_claims WHERE owner=$1 AND attempt=$2 AND expires_at>now()", [owner, item.attempt]);
     if (active.rows.length) throw new AppError("请等待当前请求结束，避免重复生成", 409, "REQUEST_STILL_UNCERTAIN");
     const retry = await db.query<{ key: string; provider: string }>(`SELECT i.key,j.synthesis->>'provider' AS provider
@@ -292,7 +290,8 @@ export async function retrySegment(jobId: string, segmentId: string, acknowledge
     if (retry.rows[0].provider === "replicate") await requireReplicateCapacity(db, owner, [retry.rows[0].key]);
     await db.query("DELETE FROM generation_claims WHERE owner=$1 AND attempt=$2", [owner, item.attempt]);
     await db.query("UPDATE job_items SET status='queued',attempt=NULL,error=NULL WHERE owner=$1 AND job_id=$2 AND segment_id=$3", [owner, jobId, segmentId]);
-    await db.query("UPDATE segments SET desired_job=$3 WHERE owner=$1 AND id=$2", [owner, segmentId, jobId]);
+    // Retrying may resolve an older uncertain claim. It must not reselect an
+    // obsolete task over the current audio/settings; attach checks desired_job.
     await db.query("UPDATE jobs SET status='queued',run_id=NULL,dispatch_after=now() WHERE owner=$1 AND id=$2", [owner, jobId]);
   });
 }
