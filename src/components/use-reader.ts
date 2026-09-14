@@ -167,7 +167,8 @@ export function useReader(initialSessionId?: string) {
       return item ? { ...segment, status: item.status, audioUrl: item.audioUrl,
         voiceId: next.voice_id, speed: next.speed } : segment;
     }) };
-    if (current.segments[indexRef.current]?.audioUrl &&
+    // Replacing attached audio cancels playback, not a Start waiting for this job.
+    if (audioRef.current && current.segments[indexRef.current]?.audioUrl &&
       current.segments[indexRef.current]?.audioUrl !== updated.segments[indexRef.current]?.audioUrl) {
       playRef.current++;
       detachAudio();
@@ -183,16 +184,23 @@ export function useReader(initialSessionId?: string) {
   }, [detachAudio]);
 
   const watchJob = useCallback((next: JobStatus, generation: number) => {
-    if (generation !== generationRef.current) return;
+    if (generation !== generationRef.current || documentRef.current?.id !== next.document_id ||
+      settingsRef.current.voiceId !== next.voice_id || settingsRef.current.speed !== next.speed) return;
     eventsRef.current?.close();
+    eventsRef.current = null;
     adoptJob(next, generation);
     if (["completed", "attention"].includes(next.status)) return;
     const events = new EventSource(`/api/jobs/${next.id}/events`);
     eventsRef.current = events;
     events.addEventListener("progress", (event) => {
+      if (eventsRef.current !== events) return;
       const snapshot = JSON.parse((event as MessageEvent).data) as JobStatus;
+      if (snapshot.id !== next.id) return;
       adoptJob(snapshot, generation);
-      if (["completed", "attention"].includes(snapshot.status)) events.close();
+      if (["completed", "attention"].includes(snapshot.status)) {
+        events.close();
+        eventsRef.current = null;
+      }
     });
   }, [adoptJob]);
 
@@ -287,7 +295,9 @@ export function useReader(initialSessionId?: string) {
     setVoiceId(next.voiceId);
     setSpeed(next.speed);
     setMessage("");
-    if (savedJobRef.current?.voice_id === next.voiceId && savedJobRef.current.speed === next.speed) {
+    if (!savingRef.current && draftRef.current.text === sourceRef.current.text &&
+      draftRef.current.title === sourceRef.current.title &&
+      savedJobRef.current?.voice_id === next.voiceId && savedJobRef.current.speed === next.speed) {
       watchJob(savedJobRef.current, generationRef.current);
     }
   }
@@ -386,6 +396,9 @@ export function useReader(initialSessionId?: string) {
       setMessage("先粘贴一些文字，或上传 TXT 文件");
       return null;
     }
+    // A new snapshot must not inherit the old document's job or subscription.
+    // Invalidate before awaiting the save so Start can own the new generation.
+    stopPlayback();
     const session = sessionRef.current;
     savingRef.current = true;
     importRef.current++;
@@ -463,16 +476,20 @@ export function useReader(initialSessionId?: string) {
     try {
       let next = await pending;
       if (generation !== generationRef.current) throw new Error("会话已切换");
+      if (jobRef.current?.id === next.id) next = jobRef.current;
       watchJob(next, generation);
       for (;;) {
-        if (generation !== generationRef.current) throw new Error("会话已切换");
-        adoptJob(next, generation);
+        if (generation !== generationRef.current || jobRef.current?.id !== next.id) throw new Error("会话已切换");
+        // An SSE update may already be newer than the initial POST snapshot.
+        next = jobRef.current;
         const item = next.items.find((item) => item.segment_id === segment.id);
         if (item?.status === "ready" && item.audioUrl) return { ...segment, status: "ready", audioUrl: item.audioUrl, voiceId: settings.voiceId, speed: settings.speed };
         if (item && ["error", "uncertain"].includes(item.status)) throw new Error(item.error || "此段生成失败，请确认后重试");
         await new Promise((resolve) => setTimeout(resolve, 1500));
         if (generation !== generationRef.current) throw new Error("会话已切换");
-        next = (await api<{ job: JobStatus }>(`/api/jobs/${next.id}`)).job;
+        const beforePoll = jobRef.current;
+        const polled = (await api<{ job: JobStatus }>(`/api/jobs/${next.id}`)).job;
+        if (jobRef.current === beforePoll && beforePoll?.id === next.id) adoptJob(polled, generation);
       }
     } finally {
       if (inFlightRef.current.get(signature) === pending) inFlightRef.current.delete(signature);
@@ -566,6 +583,7 @@ export function useReader(initialSessionId?: string) {
       const request = playRef.current;
       preparingRef.current = true;
       setIsPreparing(true);
+      setMessage("");
       try {
         await audio.play();
       } catch {
@@ -578,8 +596,14 @@ export function useReader(initialSessionId?: string) {
       }
       return;
     }
-    const saved = await saveDocument();
-    if (saved && generation === generationRef.current) await loadSegment(endedRef.current ? 0 : indexRef.current);
+    const saving = saveDocument();
+    // saveDocument synchronously invalidates old playback for a new snapshot.
+    const startGeneration = generationRef.current;
+    const request = playRef.current;
+    const saved = await saving;
+    if (saved && startGeneration === generationRef.current && request === playRef.current) {
+      await loadSegment(endedRef.current ? 0 : indexRef.current);
+    }
   }
 
   const goPrevious = useCallback(() => {
@@ -713,7 +737,7 @@ export function useReader(initialSessionId?: string) {
   const regenerationDisabledReason = isSaving || loadingId ? "请等待会话保存或加载完成" :
     isDirty ? "文字或标题有未保存的修改，请先保存或还原" :
     !savedSettings ? "请先为当前会话生成音频" :
-    voiceId !== savedSettings.voiceId || speed !== savedSettings.speed ? "声音或语速与会话已保存设置不同，请先还原" :
+    voiceId !== savedSettings.voiceId || speed !== savedSettings.speed ? "声音或语速与会话已保存设置不同。重新生成需先还原；使用当前设置请点击「开始朗读」。" :
     regenerating ? "正在提交重新生成请求" :
     pendingRegeneration ? "上次提交结果未确认，请恢复原请求，避免重复计费" :
     unfinishedRequest || isPreparing || savedJob?.status === "queued" || savedJob?.status === "running" ||

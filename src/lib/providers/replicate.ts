@@ -6,7 +6,7 @@ import { AppError } from "../errors";
 import { REPLICATE_MODEL, REPLICATE_VERSION, replicateToken } from "../tts-config";
 import { boundedBytes } from "./indextts";
 import type { Generation } from "../jobs";
-import { MAX_PREVIEW_ATTEMPTS } from "../replicate-quota";
+import { MAX_DAILY_ATTEMPTS, replicateDailyUsage } from "../replicate-quota";
 
 const prediction = z.object({ id: z.string().regex(/^[a-z0-9]+$/),
   status: z.enum(["starting", "processing", "succeeded", "failed", "canceled", "aborted"]),
@@ -38,10 +38,11 @@ export class ReplicateProvider {
         await ownerLock(tx, claim.owner);
         const existing = await tx.query("SELECT 1 FROM replicate_requests WHERE owner=$1 AND attempt=$2", [claim.owner, claim.attempt]);
         if (existing.rows.length) return false;
-        const count = await tx.query<{ count: string }>("SELECT count(*) FROM replicate_requests WHERE owner=$1", [claim.owner]);
-        // Preview guard. The separate initial smoke prediction also counts toward the $5 budget.
-        if (Number(count.rows[0].count) >= MAX_PREVIEW_ATTEMPTS) throw new AppError("预览生成额度已用完", 422);
-        await tx.query("INSERT INTO replicate_requests(owner,attempt) VALUES($1,$2)", [claim.owner, claim.attempt]);
+        const { used, startedAt } = await replicateDailyUsage(tx, claim.owner);
+        if (used >= MAX_DAILY_ATTEMPTS) throw new AppError(`今日生成额度已用完（每日 ${MAX_DAILY_ATTEMPTS} 次，洛杉矶时间零点重置）`, 422, "QUOTA_EXCEEDED");
+        // Use the checked instant, not the transaction-start timestamp default.
+        await tx.query(`INSERT INTO replicate_requests(owner,attempt,created_at,deadline)
+          VALUES($1,$2,$3,$3::timestamptz+interval '25 minutes')`, [claim.owner, claim.attempt, startedAt]);
         return true;
       });
       if (!reserved) return { status: "pending" };

@@ -266,7 +266,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
                 <button className="text-button" disabled={Boolean(regenerationDisabledReason)} aria-describedby={regenerationDisabledReason ? "regeneration-reason" : undefined}
                   onClick={() => regenerate("all")}>重新生成整篇</button>
               </div>
-              {regenerationDisabledReason && <p id="regeneration-reason">{regenerationDisabledReason}</p>}
+              {regenerationDisabledReason && <p id="regeneration-reason">暂不可重新生成：{regenerationDisabledReason}</p>}
             </div>
           </div>
         </aside>
