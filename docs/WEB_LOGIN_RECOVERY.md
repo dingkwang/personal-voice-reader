@@ -72,7 +72,7 @@ in the same browser on the configured app origin with site cookies allowed.
 Do not share callback URLs or request/cookie dumps. A maintainer should verify
 origin/callback configuration and the relevant environment privately.
 Do not change owner restrictions, MCP clients or secrets based on this category.
-No environment variable names or Vercel settings changed in this fix.
+No environment variable names or project build settings changed in this fix.
 
 ## Reader regeneration copy
 
@@ -157,5 +157,42 @@ alias binding, stable health 200, unchanged OAuth resource metadata, anonymous
 MCP 401, safe missing-state callback HTML 400, and a fresh login redirect with
 `prompt=login` and the stable callback. Redirect destinations are inspected only
 in memory; OAuth redirects are not followed and query/state/cookie values are
-not printed or saved. Results are recorded after deployment, not assumed from
-local validation.
+not printed or saved.
+
+### Verified Preview release, 2026-09-14
+
+- Source commit: `b575013259fbbd738cc8286d36a1e4f52e9e3615`, pushed to
+  `feat/audio-regeneration`.
+- Deployment: `dpl_59xdWJQfbDzWtN8DSFYbPbYLyWoN`, **READY**, created explicitly
+  with the Preview target using the existing authenticated Vercel CLI.
+- Deployment URL:
+  https://personal-voice-reader-1nvvkcjw5-dingkangs-projects.vercel.app
+- Stable alias:
+  https://personal-voice-reader-preview-dingkangs-projects.vercel.app
+- The alias API confirms the stable alias points to that deployment.
+  The deployment metadata matches the source commit.
+- Deployment input was an exact committed source snapshot. No local environment
+  files, credentials, data or uncommitted files were uploaded.
+
+| Stable Preview check | Observed result |
+| --- | --- |
+| `/api/health` | 200, expected service health |
+| Both OAuth protected-resource metadata paths | 200, resource, issuer and scopes unchanged from the predeployment baseline |
+| Anonymous `/api/mcp` | 401 with resource metadata challenge |
+| Missing-state `/auth/callback` | 400 HTML, fixed transaction-recovery copy, `no-store`, no automatic redirect |
+| Fresh login with explicit reauthentication | 307 to the expected authorization endpoint; prompt, stable callback, fresh transaction and PKCE checks passed |
+
+The unchanged OAuth resource is the stable Preview origin plus `/api/mcp`.
+The fresh login destination was inspected only in memory and never followed.
+No redirect query, state, cookie or secret values were printed or saved.
+
+The production target remained `dpl_J5FCczYKRiBADSCrWYMYYeotW6KY`.
+No production deployment, merge, real OAuth completion, paid synthesis,
+database mutation or environment change was performed.
+The new-device root cause remains unverified.
+
+The CLI initially rejected `--skip-domain`, which is production-only.
+That attempt created no deployment. The successful command retained the
+Preview target without that flag. No production flag was used.
+This deployment record is a documentation-only follow-up to the deployed
+source commit, not a claim that the documentation update was redeployed.
