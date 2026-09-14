@@ -1,7 +1,9 @@
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
+import { NextResponse } from "next/server";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { appOrigin, issuer, ownerSubject, required, validateResourceIdentity } from "./config";
 import { AppError } from "./errors";
+import { loginFailureResponse, OwnerLoginRejected, safeLoginReturnTo } from "./web-login";
 
 export type Scope = "read:voices" | "create:readings" | "read:readings";
 let client: Auth0Client | undefined;
@@ -17,8 +19,14 @@ export function auth0() {
     enableAccessTokenEndpoint: false,
     includeIdTokenHintInOIDCLogoutUrl: false,
     authorizationParameters: { scope: "openid profile" },
+    onCallback: async (error, context) => {
+      if (error) return loginFailureResponse(error);
+      return NextResponse.redirect(new URL(safeLoginReturnTo(context.returnTo), appOrigin()));
+    },
     beforeSessionSaved: async (session) => {
-      if (session.user.sub !== ownerSubject()) throw new AppError("仅限拥有者登录", 403, "FORBIDDEN");
+      // The SDK calls this AFTER onCallback. Throw to prevent session storage,
+      // rather than returning an error response from a successful callback.
+      if (session.user.sub !== ownerSubject()) throw new OwnerLoginRejected();
       return session;
     },
   });

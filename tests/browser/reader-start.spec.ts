@@ -47,12 +47,12 @@ function syntheticWav() {
   return bytes;
 }
 
-async function fixture(page: Page, options: { cached?: boolean; error?: string; savedJob?: boolean; itemError?: "error" | "uncertain" } = {}) {
+async function fixture(page: Page, options: { cached?: boolean; error?: string; savedJob?: boolean; itemError?: "error" | "uncertain"; initialJob?: JobStatus } = {}) {
   const document = savedDocument();
   const posts: { documentId: string; voiceId: string; speed: number; idempotencyKey: string }[] = [];
   const saves: { text: string; title: string }[] = [];
   const unexpected: string[] = [];
-  let currentJob = jobFor(document);
+  let currentJob = options.initialJob || jobFor(document);
   const documents = new Map([[document.id, document]]);
   const details = new Map([[document.id, { document, job: options.savedJob === false ? null : currentJob }]]);
   const wav = syntheticWav();
@@ -510,3 +510,71 @@ test("playback rejection and media errors are visible and retryable", async ({ p
   await expect(page.getByRole("alert").filter({ hasText: "音频无法播放，请重试" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始朗读", exact: true })).toBeEnabled();
 });
+
+for (const width of [1440, 390]) {
+  test(`regeneration copy separates queued, running, uncertain and done at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    await controlledEvents(page);
+    const queued = jobFor(savedDocument(), "voice_fish", 1.2, "queued");
+    const state = await fixture(page, { initialJob: queued });
+    const reason = page.locator("#regeneration-reason");
+    const button = page.getByRole("button", { name: "重新生成整篇", exact: true });
+    await expect(button).toBeDisabled();
+    await expect(reason).toContainText("后台生成中（Fish Audio · 已就绪 0/2）");
+    await expect(reason).not.toContainText("不确定");
+    await page.screenshot({ path: testInfo.outputPath("queued.png"), fullPage: true });
+
+    const running: JobStatus = { ...queued, status: "running",
+      items: [{ ...queued.items[0], status: "ready" }, { ...queued.items[1], status: "working" }] };
+    await progress(page, running);
+    await expect(reason).toContainText("已就绪 1/2");
+    await expect(reason).not.toContainText("不确定");
+    await page.screenshot({ path: testInfo.outputPath("running.png"), fullPage: true });
+
+    await progress(page, { ...running, status: "attention",
+      items: [running.items[0], { ...running.items[1], status: "uncertain", error: "合成测试：结果不确定" }] });
+    await expect(reason).toContainText("部分段落生成结果不确定，可能已计费");
+    await expect(reason).not.toContainText("后台生成中");
+    await expect(button).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath("uncertain.png"), fullPage: true });
+
+    state.details.set(state.document.id, { document: state.document, job: jobFor(state.document) });
+    await page.reload();
+    await expect(button).toBeEnabled();
+    await expect(reason).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("done.png"), fullPage: true });
+    expect(state.posts).toHaveLength(0);
+    expect(state.unexpected).toEqual([]);
+  });
+
+  test(`regeneration copy separates pending POST, recovery and playback preparation at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    const state = await fixture(page);
+    const arrived = deferred(), release = deferred();
+    await page.route("**/regenerate", async (route) => {
+      arrived.resolve();
+      await release.promise;
+      await route.abort("failed");
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "重新生成整篇", exact: true }).click();
+    await arrived.promise;
+    await expect(page.locator("#regeneration-reason")).toContainText("正在提交重新生成请求");
+    await page.screenshot({ path: testInfo.outputPath("pending-post.png"), fullPage: true });
+    release.resolve();
+    await expect(page.locator("#regeneration-reason")).toContainText("请恢复原请求");
+    await page.screenshot({ path: testInfo.outputPath("post-recovery.png"), fullPage: true });
+
+    // Discard only this synthetic test's pending request to isolate playback copy.
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await expect(page.getByRole("button", { name: "重新生成整篇", exact: true })).toBeEnabled();
+    await page.evaluate(() => { HTMLMediaElement.prototype.play = () => new Promise(() => {}); });
+    await page.getByRole("button", { name: "开始朗读", exact: true }).click();
+    await expect(page.locator("#regeneration-reason")).toContainText("正在准备播放音频");
+    await expect(page.locator("#regeneration-reason")).not.toContainText("不确定");
+    await page.screenshot({ path: testInfo.outputPath("playback-preparation.png"), fullPage: true });
+    expect(state.posts).toHaveLength(0);
+    expect(state.unexpected).toEqual([]);
+  });
+}

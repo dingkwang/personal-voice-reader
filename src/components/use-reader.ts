@@ -2,6 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import type { DocumentSummary, JobStatus, PublicDocument, Segment, Voice } from "@/lib/types";
 import { encodePcmWav } from "@/lib/wav";
 import type { RegenerateInput } from "@/lib/jobs";
+import { generationDisabledReason } from "./regeneration-reason";
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -738,11 +739,10 @@ export function useReader(initialSessionId?: string) {
     isDirty ? "文字或标题有未保存的修改，请先保存或还原" :
     !savedSettings ? "请先为当前会话生成音频" :
     voiceId !== savedSettings.voiceId || speed !== savedSettings.speed ? "声音或语速与会话已保存设置不同。重新生成需先还原；使用当前设置请点击「开始朗读」。" :
-    regenerating ? "正在提交重新生成请求" :
-    pendingRegeneration ? "上次提交结果未确认，请恢复原请求，避免重复计费" :
-    unfinishedRequest || isPreparing || savedJob?.status === "queued" || savedJob?.status === "running" ||
-      savedJob?.items.some((item) => item.status === "uncertain" || item.status === "working" || item.status === "queued")
-      ? "存在未完成或结果不确定的请求，请先处理原任务" : "";
+    generationDisabledReason({
+      regenerating, pendingRegeneration: Boolean(pendingRegeneration), unfinishedRequest, isPreparing, savedJob,
+      provider: savedJob?.synthesis?.provider || voices.find((voice) => voice.id === savedJob?.voice_id)?.provider,
+    });
   const recoveryDisabledReason = isSaving || loadingId ? "请等待会话保存或加载完成" :
     isDirty ? "请先还原未保存的文字或标题，再恢复原请求" :
     pendingRegeneration && (voiceId !== pendingRegeneration.voiceId || speed !== pendingRegeneration.speed)
