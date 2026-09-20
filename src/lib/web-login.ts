@@ -2,8 +2,8 @@ import { SdkError } from "@auth0/nextjs-auth0/errors";
 import { NextResponse } from "next/server";
 import { AppError } from "./errors";
 
-export class OwnerLoginRejected extends AppError {
-  constructor() { super("仅限拥有者登录", 403, "OWNER_LOGIN_REJECTED"); }
+export class InvalidWebSession extends AppError {
+  constructor() { super("登录凭据无效，请重新登录", 401, "INVALID_WEB_SESSION"); }
 }
 
 // Only reader destinations are valid. Never return to auth/API routes or carry
@@ -14,7 +14,7 @@ export function safeLoginReturnTo(value: unknown): string {
 }
 
 export function loginFailureKind(error: unknown) {
-  if (error instanceof OwnerLoginRejected) return "owner";
+  if (error instanceof InvalidWebSession) return "session";
   // Inspect only the SDK's top-level, allowlisted code, never message or cause.
   if (error instanceof SdkError) {
     switch (error.code) {
@@ -32,9 +32,9 @@ export function loginFailureKind(error: unknown) {
 }
 
 const failures = {
-  owner: {
-    status: 403, title: "此账号无法访问",
-    message: "此阅读器仅限拥有者使用。刚才登录的账号没有访问权限，请使用拥有者账号重新登录。",
+  session: {
+    status: 401, title: "登录凭据无效",
+    message: "无法确认当前登录身份。请重新登录，你的文章和声音仅对自己的账号可见。",
   },
   transaction: {
     status: 400, title: "登录验证未完成",
@@ -46,7 +46,7 @@ const failures = {
   },
   authorization: {
     status: 400, title: "登录授权未完成",
-    message: "登录服务未能完成这次授权，尚不能判断是否为拥有者账号。请重新开始登录。",
+    message: "登录服务未能完成这次授权。请重新开始登录。",
   },
   unavailable: {
     status: 503, title: "登录服务暂不可用",
@@ -76,11 +76,11 @@ nav{display:flex;flex-direction:column;align-items:flex-start;gap:12px;margin-to
 a{display:inline-block;padding:10px 16px;border:1px solid #1e654b;border-radius:10px;color:#1e654b;text-decoration:none;min-height:44px}
 a:first-child{background:#1e654b;color:white}a:focus-visible{outline:3px solid #e46f43;outline-offset:4px}
 </style></head><body><main aria-labelledby="login-title">
-<p class="brand">声笺 · 私人阅读器</p><h1 id="login-title">${failure.title}</h1>
+<p class="brand">声笺 · 个人阅读器</p><h1 id="login-title">${failure.title}</h1>
 <p>${failure.message}</p>
 ${kind === "transaction" ? "<p>请在同一浏览器中重新开始，并允许此站点使用 Cookie。不要刷新或重复打开旧的登录回调页面。</p>" : ""}
 <nav aria-label="登录恢复">
-${kind === "owner" ? '<a href="/auth/login?prompt=login" rel="noreferrer">使用其他账号登录</a>' : ""}
+${kind === "session" ? '<a href="/auth/login?prompt=login" rel="noreferrer">使用其他账号登录</a>' : ""}
 <a href="/auth/login" rel="noreferrer">重新开始登录</a>
 </nav></main></body></html>`, {
     status: failure.status,

@@ -10,6 +10,11 @@ continues after disconnect and exposes reconnectable progress.
 Read [the cloud runbook](docs/CLOUD_RUNBOOK.md) for resource isolation, exact
 Auth0 web/MCP registration, deployment gates, migration and rollback.
 Read [HANDOFF.md](HANDOFF.md) for actual verification and cloud blockers.
+Read [multi-user web access](docs/MULTI_USER_WEB.md) for the current web
+authorization model and remaining Auth0/Google setup. Tenant users get separate
+readers keyed by Auth0 subject. New users upload their own voice. The original
+owner's data stays unchanged; MCP remains owner-only. Replicate allows 1,000
+attempts per user per Los Angeles calendar day. This change is not deployed.
 
 ```sh
 npm ci

@@ -1,5 +1,20 @@
 # Implementation and cloud handoff, 2026-09-07
 
+## Multi-user web change, 2026-09-19, Preview-authorized
+
+Web access now uses verified Auth0 subjects for separate readers. The original
+database login and data remain unchanged. MCP is still owner-only.
+Replicate allows 1,000 attempts per user per LA day. New users can upload their
+own reference voice without provider synthesis on save.
+The original owner can recover an uncertain legacy regeneration request only
+after ownership verification; other users cannot touch legacy browser keys.
+See [scope, audit and remaining setup](docs/MULTI_USER_WEB.md).
+Local checks and review artifacts are in the
+[acceptance report](docs/MULTI_USER_WEB_ACCEPTANCE.md).
+Root authorized commit, push and Preview publication after review. No live
+login, cloud configuration mutation, migration or paid synthesis was performed.
+The deployment records below are historical, not verification of this change.
+
 ## Replicate web preview — 2026-09-12
 
 The user selected Replicate IndexTTS 2 to ship within two hours. This supersedes

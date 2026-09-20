@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { AuthorizationCodeGrantRequestError, InvalidStateError } from "@auth0/nextjs-auth0/errors";
-import { loginFailureResponse, OwnerLoginRejected } from "../../src/lib/web-login";
+import { loginFailureResponse, InvalidWebSession } from "../../src/lib/web-login";
 
 // Render the production failure response with synthetic failures only.
 // No real auth routes, provider redirects, browser profiles or credentials.
 for (const width of [1440, 390]) {
   for (const [kind, error, title] of [
-    ["owner", new OwnerLoginRejected(), "此账号无法访问"],
+    ["session", new InvalidWebSession(), "登录凭据无效"],
     ["transaction", new InvalidStateError(), "登录验证未完成"],
     ["token", new AuthorizationCodeGrantRequestError(), "登录凭据验证未完成"],
     ["unknown", new Error("synthetic-private-payload"), "登录未完成"],
@@ -41,7 +41,7 @@ for (const width of [1440, 390]) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       expect(requests).toHaveLength(1);
       await page.screenshot({ path: testInfo.outputPath(`${kind}-${width}.png`), fullPage: true });
-      if (kind === "owner") {
+      if (kind === "session") {
         await expect(page.getByRole("link", { name: "使用其他账号登录" })).toHaveAttribute("href", "/auth/login?prompt=login");
         await page.getByRole("link", { name: "使用其他账号登录" }).click();
         await expect(page).toHaveURL("http://127.0.0.1:3118/auth/login?prompt=login");

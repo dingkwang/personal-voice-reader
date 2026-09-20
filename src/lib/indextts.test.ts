@@ -47,7 +47,7 @@ it("queues web IndexTTS without Fish credentials and leaves MCP default alone", 
   expect(web.defaultVoiceId).toBe(voice.id);
   expect(web.voices.find((v) => v.id === voice.id)).not.toHaveProperty("reference");
   expect(web.voices.find((v) => v.id === "voice_test")?.available).toBe(false);
-  const fish = await createReading({ text: "旧默认", speed: 1, idempotency_key: randomUUID() });
+  const fish = await createReading({ text: "旧默认", speed: 1, idempotency_key: randomUUID() }, TEST_OWNER);
   expect((await fixture.db.query("SELECT voice_id FROM jobs WHERE id=$1", [fish.jobId])).rows[0].voice_id).toBe("voice_test");
   const documentId = fish.documentId;
   const response = await tts(new Request("http://localhost/api/tts", { method: "POST", body: JSON.stringify({ documentId, voiceId: voice.id, speed: 1, idempotencyKey: randomUUID() }) }));
@@ -59,20 +59,20 @@ it("queues web IndexTTS without Fish credentials and leaves MCP default alone", 
 });
 it("snapshots the reference/model and uses a new cache namespace", async () => {
   const originalInput = args();
-  const job = await createReading(originalInput);
+  const job = await createReading(originalInput, TEST_OWNER);
   const first = (await fixture.db.query<{ synthesis: unknown; model: string }>("SELECT synthesis,model FROM jobs WHERE id=$1", [job.jobId])).rows[0];
   expect(first.model).toBe(INDEXTTS_MODEL);
   await fixture.db.query("UPDATE voices SET data=$3 WHERE owner=$1 AND id=$2", [TEST_OWNER, voice.id, { ...voice, reference: { ...ref, hash: "b".repeat(64) } }]);
-  expect((await createReading(originalInput)).jobId).toBe(job.jobId);
+  expect((await createReading(originalInput, TEST_OWNER)).jobId).toBe(job.jobId);
   const claim = await claimNext(job.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("missing claim");
   expect(claim.job.synthesis?.reference?.hash).toBe(ref.hash);
-  const next = await queueDocument({ documentId: job.documentId, voiceId: voice.id, speed: 1.5, idempotencyKey: randomUUID() });
+  const next = await queueDocument({ documentId: job.documentId, voiceId: voice.id, speed: 1.5, idempotencyKey: randomUUID() }, TEST_OWNER);
   // Reference edits cannot coalesce into a task with different synthesis settings.
   expect(next.jobId).not.toBe(job.jobId);
 });
 it("polls one durable attempt through transient failures, then publishes private MP3", async () => {
-  const job = await createReading(args());
+  const job = await createReading(args(), TEST_OWNER);
   mock.fetch.mockRejectedValueOnce(new Error("lost response"));
   await generateNext(job.jobId, TEST_OWNER);
   const attempt = (await fixture.db.query("SELECT attempt FROM job_items WHERE job_id=$1", [job.jobId])).rows[0].attempt;
@@ -81,41 +81,41 @@ it("polls one durable attempt through transient failures, then publishes private
   expect(mock.fetch.mock.calls[0][0]).toBe(mock.fetch.mock.calls[1][0]);
   expect((await fixture.db.query("SELECT * FROM indextts_requests")).rows).toHaveLength(1);
   expect(mock.get).toHaveBeenCalledTimes(1);
-  expect((await readingStatus(job.jobId)).items[0].status).toBe("working");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).items[0].status).toBe("working");
   mock.fetch.mockImplementation(async (url: string) => url.endsWith("/audio")
     ? new Response("ID3synthetic", { headers: { "Content-Type": "audio/mpeg" } }) : Response.json({ status: "ready" }));
   await fixture.db.query("UPDATE generation_claims SET poll_after=now()-interval '1 second'");
   await generateNext(job.jobId, TEST_OWNER);
-  expect((await readingStatus(job.jobId)).status).toBe("completed");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).status).toBe("completed");
   expect((await fixture.db.query("SELECT attempt FROM job_items WHERE job_id=$1", [job.jobId])).rows[0].attempt).toBe(attempt);
   expect((await fixture.db.query("SELECT * FROM generation_claims")).rows).toHaveLength(0);
-  const repeated = await createReading(args());
+  const repeated = await createReading(args(), TEST_OWNER);
   expect(await generateNext(repeated.jobId, TEST_OWNER)).toBe("done");
 });
 it("rejects cross-owner reference reads before reaching Modal", async () => {
   await fixture.db.query("UPDATE voices SET data=$3 WHERE owner=$1 AND id=$2", [TEST_OWNER, voice.id, { ...voice, reference: { ...ref, pathname: "references/another-owner/recording.wav" } }]);
-  await generateNext((await createReading(args())).jobId, TEST_OWNER);
+  await generateNext((await createReading(args(), TEST_OWNER)).jobId, TEST_OWNER);
   expect(mock.get).not.toHaveBeenCalled();
   expect(mock.fetch).not.toHaveBeenCalled();
 });
 it("marks terminal failure and requires explicit retry; expiry keeps uncertain slots", async () => {
-  const job = await createReading(args());
+  const job = await createReading(args(), TEST_OWNER);
   mock.fetch.mockResolvedValueOnce(Response.json({ status: "error" }));
   await generateNext(job.jobId, TEST_OWNER);
-  const state = await readingStatus(job.jobId);
+  const state = await readingStatus(job.jobId, TEST_OWNER);
   expect(state.items[0].status).toBe("error");
   await retrySegment(job.jobId, state.items[0].segment_id, true, TEST_OWNER);
   await generateNext(job.jobId, TEST_OWNER);
   expect((await fixture.db.query("SELECT * FROM indextts_requests")).rows).toHaveLength(2);
   await fixture.db.query("UPDATE generation_claims SET expires_at=now()-interval '1 second'");
   await generateNext(job.jobId, TEST_OWNER);
-  expect((await readingStatus(job.jobId)).items[0].status).toBe("uncertain");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).items[0].status).toBe("uncertain");
   expect((await fixture.db.query("SELECT * FROM generation_claims")).rows).toHaveLength(1);
 });
 it("recovery skips unconfigured Fish tasks and dispatches IndexTTS", async () => {
-  await createReading({ text: "旧 Fish", speed: 1, idempotency_key: randomUUID() });
-  const index = await createReading(args());
-  expect(await recoverDispatches()).toBe(1);
+  await createReading({ text: "旧 Fish", speed: 1, idempotency_key: randomUUID() }, TEST_OWNER);
+  const index = await createReading(args(), TEST_OWNER);
+  expect(await recoverDispatches()).toBe(2);
   expect(mock.start).toHaveBeenCalledTimes(1);
   expect(mock.start.mock.calls[0][1]).toEqual([index.jobId, TEST_OWNER]);
 });

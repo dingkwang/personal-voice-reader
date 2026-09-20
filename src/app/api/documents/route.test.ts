@@ -137,9 +137,9 @@ describe("GET /api/documents", () => {
     const routes = await loadRoutes();
     const response = await postDocument({ text: "最早的会话。", title: "最早" }, routes);
     const { document: oldest } = await response.json();
-    const template = await routes.store.findDocument(oldest.id);
+    const template = await routes.store.findDocument(oldest.id, TEST_OWNER);
     for (let index = 0; index < 100; index++) {
-      await routes.store.addDocument({ ...template, id: `doc_fixture_${index}`, segments: [] });
+      await routes.store.addDocument({ ...template, id: `doc_fixture_${index}`, segments: [] }, TEST_OWNER);
     }
     await postDocument({ text: "新的会话。", title: "最新" }, routes);
     const body = await (await getDocuments(routes)).json();

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 import { InvalidStateError } from "@auth0/nextjs-auth0/errors";
 import { GET } from "./route";
-import { OwnerLoginRejected } from "@/lib/web-login";
+import { InvalidWebSession } from "@/lib/web-login";
 
 const mock = vi.hoisted(() => ({ middleware: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth0: () => mock }));
@@ -10,7 +10,7 @@ beforeEach(() => vi.resetAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  [new OwnerLoginRejected(), 403, "此账号无法访问"],
+  [new InvalidWebSession(), 401, "登录凭据无效"],
   [new InvalidStateError(), 400, "登录验证未完成"],
   [new Error("synthetic-private-payload"), 500, "暂时无法确认失败原因"],
 ] as const)("handles thrown failures safely without a retry redirect", async (error, status, copy) => {

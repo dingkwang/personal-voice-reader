@@ -47,7 +47,7 @@ function syntheticWav() {
   return bytes;
 }
 
-async function fixture(page: Page, options: { cached?: boolean; error?: string; savedJob?: boolean; itemError?: "error" | "uncertain"; initialJob?: JobStatus } = {}) {
+async function fixture(page: Page, options: { cached?: boolean; error?: string; savedJob?: boolean; itemError?: "error" | "uncertain"; initialJob?: JobStatus; allowLegacyRecovery?: boolean } = {}) {
   const document = savedDocument();
   const posts: { documentId: string; voiceId: string; speed: number; idempotencyKey: string }[] = [];
   const saves: { text: string; title: string }[] = [];
@@ -91,7 +91,7 @@ async function fixture(page: Page, options: { cached?: boolean; error?: string; 
       })) } });
     }
     if (details.has(url.pathname.split("/").at(-1)!)) {
-      return route.fulfill({ json: details.get(url.pathname.split("/").at(-1)!) });
+      return route.fulfill({ json: { ...details.get(url.pathname.split("/").at(-1)!), allowLegacyRecovery: options.allowLegacyRecovery === true } });
     }
     if (url.pathname === "/api/tts") {
       const input = request.postDataJSON();
@@ -436,6 +436,127 @@ test("lost regeneration response recovers the same persisted request after reloa
   expect(await playingSource(page)).toBeUndefined();
   expect(state.posts).toHaveLength(0);
 });
+
+const legacyKey = "voice-note:regeneration:v1:doc_saved";
+const currentKey = "voice-note:regeneration:v2:synthetic-reader:doc_saved";
+const legacyRequest = { scope: "all", sourceJobId: "job_saved", voiceId: "voice_fish", speed: 1.2,
+  idempotencyKey: "original-uncertain-submission", acknowledgeBilling: true };
+
+for (const width of [1440, 390]) {
+  test(`legacy recovery migrates only after original-owner document verification at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    await controlledEvents(page);
+    const state = await fixture(page, { allowLegacyRecovery: true });
+    const raw = JSON.stringify(legacyRequest);
+    await page.evaluate(({ key, raw }) => localStorage.setItem(key, raw), { key: legacyKey, raw });
+    let arrived!: () => void, release!: () => void;
+    const requested = new Promise<void>((resolve) => { arrived = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/documents/doc_saved", async (route) => {
+      arrived(); await held;
+      await route.fulfill({ json: { document: state.document, job: jobFor(state.document), allowLegacyRecovery: true } });
+    });
+    const posts: unknown[] = [];
+    await page.route("**/regenerate", async (route) => {
+      posts.push(route.request().postDataJSON());
+      await route.fulfill(posts.length === 1 ? { status: 503, json: { error: "提交结果未确认" } }
+        : { status: 202, json: { job: { ...jobFor(state.document), regeneration: true } } });
+    });
+    await page.reload();
+    await requested;
+    expect(await page.evaluate((key) => localStorage.getItem(key), currentKey)).toBeNull();
+    await expect(page.getByRole("button", { name: "恢复原请求" })).toHaveCount(0);
+    release();
+    const recover = page.getByRole("button", { name: "恢复原请求" });
+    await expect(recover).toBeEnabled();
+    expect(posts).toHaveLength(0);
+    expect(await page.evaluate((keys) => keys.map((key) => localStorage.getItem(key)), [legacyKey, currentKey])).toEqual([raw, raw]);
+    await expect(page.getByRole("button", { name: "重新生成整篇", exact: true })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath(`legacy-recovery-${width}.png`), fullPage: true });
+    await recover.click();
+    await expect(page.getByRole("alert").filter({ hasText: "提交结果未确认" })).toBeVisible();
+    expect(await page.evaluate((keys) => keys.map((key) => localStorage.getItem(key)), [legacyKey, currentKey])).toEqual([raw, raw]);
+    await page.reload();
+    await recover.click();
+    await expect(recover).toHaveCount(0);
+    expect(posts).toEqual([legacyRequest, legacyRequest]);
+    expect(await page.evaluate((keys) => keys.map((key) => localStorage.getItem(key)), [legacyKey, currentKey])).toEqual([null, null]);
+    expect(state.posts).toHaveLength(0);
+  });
+}
+
+test("legacy recovery prefers existing v2 and preserves a different legacy request", async ({ page }) => {
+  await controlledEvents(page);
+  const state = await fixture(page, { allowLegacyRecovery: true });
+  const current = { ...legacyRequest, idempotencyKey: "existing-v2-submission" };
+  await page.evaluate(({ legacyKey, currentKey, legacy, current }) => {
+    localStorage.setItem(legacyKey, JSON.stringify(legacy));
+    localStorage.setItem(currentKey, JSON.stringify(current));
+  }, { legacyKey, currentKey, legacy: legacyRequest, current });
+  const posts: unknown[] = [];
+  await page.route("**/regenerate", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({ status: 202, json: { job: jobFor(state.document) } });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "恢复原请求" }).click();
+  await expect(page.getByRole("button", { name: "恢复原请求" })).toHaveCount(0);
+  expect(posts).toEqual([current]);
+  expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey)).toBe(JSON.stringify(legacyRequest));
+});
+
+for (const denied of [false, true]) {
+  test(`legacy recovery never touches keys for ${denied ? "unowned documents" : "other users"}`, async ({ page }) => {
+    await controlledEvents(page);
+    await fixture(page, { allowLegacyRecovery: denied });
+    await page.evaluate(({ key, raw }) => localStorage.setItem(key, raw), { key: legacyKey, raw: JSON.stringify(legacyRequest) });
+    await page.addInitScript(() => {
+      const touches: string[] = [];
+      Object.assign(window, { __legacyTouches: touches });
+      for (const method of ["getItem", "setItem", "removeItem"] as const) {
+        const original = Storage.prototype[method];
+        Storage.prototype[method] = function (key: string, value?: string) {
+          if (key.startsWith("voice-note:regeneration:v1:")) touches.push(method);
+          return Reflect.apply(original, this, value === undefined ? [key] : [key, value]);
+        };
+      }
+    });
+    if (denied) await page.route("**/api/documents/doc_saved", (route) => route.fulfill({ status: 404, json: { error: "Not found" } }));
+    await page.reload();
+    if (denied) await expect(page.getByRole("alert").filter({ hasText: "这条会话加载失败" })).toBeVisible();
+    else await expect(page.getByRole("button", { name: "重新生成整篇", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "恢复原请求" })).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { __legacyTouches: string[] }).__legacyTouches)).toEqual([]);
+    expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey)).toBe(JSON.stringify(legacyRequest));
+    expect(await page.evaluate((key) => localStorage.getItem(key), currentKey)).toBeNull();
+  });
+}
+
+for (const failure of ["malformed legacy", "malformed v2", "read", "write"] as const) {
+  test(`legacy recovery blocks new billing on ${failure} storage failure`, async ({ page }) => {
+    await controlledEvents(page);
+    const state = await fixture(page, { allowLegacyRecovery: true });
+    const raw = failure === "malformed legacy" ? "{" : JSON.stringify(legacyRequest);
+    await page.evaluate(({ legacyKey, currentKey, raw, failure }) => {
+      localStorage.setItem(legacyKey, raw);
+      if (failure === "malformed v2") localStorage.setItem(currentKey, "{");
+    }, { legacyKey, currentKey, raw, failure });
+    if (failure === "read" || failure === "write") await page.addInitScript(({ failure, legacyKey, currentKey }) => {
+      const method = failure === "read" ? "getItem" : "setItem";
+      const original = Storage.prototype[method];
+      Storage.prototype[method] = function (key: string, value?: string) {
+        if (key === (failure === "read" ? legacyKey : currentKey)) throw new Error("Synthetic storage failure");
+        return Reflect.apply(original, this, value === undefined ? [key] : [key, value]);
+      };
+    }, { failure, legacyKey, currentKey });
+    await page.reload();
+    await expect(page.getByRole("alert").filter({ hasText: "无法读取重新生成请求记录" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重新生成整篇", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "恢复原请求" })).toHaveCount(0);
+    expect(state.posts).toHaveLength(0);
+    if (failure !== "read") expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey)).toBe(raw);
+  });
+}
 
 test("old polling and SSE cannot adopt into a newer voice selection", async ({ page }) => {
   await controlledEvents(page);

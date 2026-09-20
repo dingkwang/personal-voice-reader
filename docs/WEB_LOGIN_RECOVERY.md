@@ -19,9 +19,11 @@ Local inspection used Auth0 Next.js SDK **4.29.0** and Next.js **16.3.4** guides
 
 SDK state/token failures reach `onCallback`. On successful token processing,
 the SDK calls `onCallback` **before** `beforeSessionSaved` and session storage.
-The exact `session.user.sub === AUTH0_OWNER_SUB` guard must still throw on
-mismatch. Returning a denial page from a successful `onCallback` alone would
-not prevent the SDK from storing that session.
+The multi-user web implementation now accepts every valid tenant subject.
+`beforeSessionSaved` rejects missing or malformed subjects, not other users.
+Returning a denial page from a successful `onCallback` alone would not prevent
+the SDK from storing that session. MCP keeps its separate exact-owner guard.
+See [multi-user web access](MULTI_USER_WEB.md) for enablement and publication gates.
 
 ## Failure categories
 
@@ -31,7 +33,7 @@ cookies, tokens, subjects, email addresses or other user data.
 
 | Evidence | Page / status |
 | --- | --- |
-| Dedicated exception from the exact owner guard | Wrong account, 403 |
+| Dedicated exception for an invalid web subject | Invalid session, 401 |
 | SDK `missing_state` or `invalid_state` | Transaction verification incomplete, 400 |
 | SDK `authorization_code_grant_request_error`, `authorization_code_grant_error`, `session_expired` | Credential exchange/validation incomplete, 400 |
 | SDK `authorization_error` | Authorization incomplete, 400 |
@@ -39,7 +41,7 @@ cookies, tokens, subjects, email addresses or other user data.
 | Anything else | Cause unknown, 500 |
 
 Only allowlisted top-level SDK codes are classified. Nested provider
-`access_denied` is **not** proof of owner rejection. Missing configuration
+`access_denied` is **not** proof of an app permission failure. Missing configuration
 or an unrelated `FORBIDDEN` exception is not proof either.
 
 The SDK maps absent, expired, malformed or undecryptable transaction cookies
@@ -49,10 +51,10 @@ conditions occurred, nor prove a device/browser setting caused it.
 ## Manual recovery
 
 - Every failure page offers **重新开始登录** at `/auth/login`.
-- Wrong-account denial also offers **使用其他账号登录** at
+- Invalid-session recovery also offers **使用其他账号登录** at
   `/auth/login?prompt=login`. The SDK forwards the supported OIDC `prompt=login`
   parameter. The user must explicitly click it; no automatic loop is added.
-  This requests reauthentication, not a change to owner permissions or a
+  This requests reauthentication, not account linking or a
   guarantee about a federated provider's account-picker UI.
 - Recovery starts at home. It does not reuse callback parameters.
 - Login and successful callback destinations allow only `/` or a bounded
@@ -71,7 +73,7 @@ If transaction recovery keeps failing, check that login starts and finishes
 in the same browser on the configured app origin with site cookies allowed.
 Do not share callback URLs or request/cookie dumps. A maintainer should verify
 origin/callback configuration and the relevant environment privately.
-Do not change owner restrictions, MCP clients or secrets based on this category.
+Do not change MCP restrictions, clients or secrets based on this category.
 No environment variable names or project build settings changed in this fix.
 
 ## Reader regeneration copy
@@ -83,8 +85,8 @@ background work and uncertain items separately.
 
 Pending POST, unconfirmed submission recovery and playback preparation have
 separate copy. Existing save/settings/billing/idempotency guards are unchanged.
-The Replicate limit remains **1,000 provider attempts per Los Angeles calendar
-day**, resetting at midnight in `America/Los_Angeles`.
+The Replicate limit remains **1,000 provider attempts per user per Los Angeles
+calendar day**, resetting at midnight in `America/Los_Angeles`.
 
 ## Local checks
 
@@ -97,8 +99,8 @@ npx playwright test --config playwright.reader.config.ts
 
 Unit tests cover the allowlist, sanitized errors, redirect boundaries and
 reader guards. SDK tests use synthetic encrypted transactions, locally signed
-ID tokens and mocked provider responses to verify owner rejection before
-session storage, state/cookie failures, token failures and `prompt=login`.
+ID tokens and mocked provider responses to verify tenant-user acceptance,
+invalid-subject rejection, state/cookie failures, token failures and `prompt=login`.
 These are not live OAuth acceptance tests.
 
 Browser tests render the production failure HTML with synthetic errors.

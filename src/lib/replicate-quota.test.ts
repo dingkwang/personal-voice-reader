@@ -6,6 +6,7 @@ import { ownerPrefix, sha256 } from "./blob";
 import { claimNext, createReading, retrySegment, uncertainGeneration } from "./jobs";
 import { ReplicateProvider } from "./providers/replicate";
 import { MAX_DAILY_ATTEMPTS, replicateDailyUsage, requireReplicateCapacity } from "./replicate-quota";
+import { addVoice, findVoice } from "./store";
 
 const mock = vi.hoisted(() => ({ fetch: vi.fn(), get: vi.fn() }));
 vi.mock("@vercel/blob", () => ({ get: mock.get }));
@@ -227,4 +228,44 @@ it.each(["processing", "uncertain"])("does not resubmit yesterday's %s attempt a
   }
   expect(mock.fetch.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(1);
   expect((await db.query("SELECT * FROM replicate_requests")).rows).toHaveLength(1);
+});
+
+it("keeps each user's last daily attempt atomic and independent across concurrent submissions and reset", async () => {
+  const other = "google-oauth2|quota-other";
+  const voice = await findVoice("voice_replicate", TEST_OWNER);
+  await addVoice({ ...voice, reference: { ...voice.reference!,
+    pathname: `references/${ownerPrefix(other)}/${voice.reference!.hash}.wav` } }, other);
+  const groups = [];
+  for (const owner of [TEST_OWNER, other]) {
+    const claims = [];
+    for (const text of ["第一段", "第二段"]) {
+      const queued = await createReading({ text, voice_id: voice.id, speed: 1, idempotency_key: text.repeat(4) }, owner);
+      const next = await claimNext(queued.jobId, owner);
+      if (typeof next === "string") throw new Error("Missing claim");
+      claims.push(next);
+    }
+    await attempts(999, instant.toISOString(), owner);
+    groups.push(claims);
+  }
+  const provider = new ReplicateProvider();
+  const results = await Promise.all(groups.map((claims) => Promise.allSettled(claims.map((c) => provider.poll(c)))));
+  for (const group of results) {
+    expect(group.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(group.find((item) => item.status === "rejected")).toMatchObject({ reason: { code: "QUOTA_EXCEEDED" } });
+  }
+  const used = (owner: string) => db.transaction(async (tx) => {
+    await ownerLock(tx, owner);
+    return (await replicateDailyUsage(tx, owner)).used;
+  });
+  expect(await used(TEST_OWNER)).toBe(1000);
+  expect(await used(other)).toBe(1000);
+  expect(mock.fetch.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(2);
+  instant = new Date("2026-09-14T07:00:00Z");
+  expect(await used(TEST_OWNER)).toBe(0);
+  expect(await used(other)).toBe(0);
+  await attempts(1000, instant.toISOString(), TEST_OWNER);
+  const pending = groups[1][results[1].findIndex((item) => item.status === "rejected")];
+  expect(await provider.poll(pending)).toEqual({ status: "pending" });
+  expect(await used(TEST_OWNER)).toBe(1000);
+  expect(await used(other)).toBe(1);
 });

@@ -1,6 +1,9 @@
 # Replicate IndexTTS 2 preview
 
-The web default is the owner's preconfigured reference voice. It uses Replicate
+The original owner's web default remains their preconfigured reference voice.
+Other users start empty and upload their own voice. This multi-user implementation
+is local, not a verified deployment. See [web access](MULTI_USER_WEB.md).
+Replicate uses
 `lucataco/indextts-2`, pinned to
 `b219b0f22f95fd97cb2c8e3bbea6827a450a7fff05674c996d83171d70b3f685`.
 This is IndexTTS 2, not 2.5. Modal is not required or deployed.
@@ -36,13 +39,14 @@ extension and MIME. Range requests support seeking. Cache keys include provider,
 model version, reference checksum, text and settings. Existing Fish audio remains
 playable. MCP keeps its existing Fish default.
 
-The supplied voice is configured by the seed script. General Replicate voice
-upload/recording UI and emotion controls are deferred. The Add Voice dialog retains
-the existing Fish and separately configured Modal options.
+The supplied original voice was configured by the seed script. New users use the
+Add Voice dialog to upload or record a 10–20 second reference. It is normalized
+in-browser and validated server-side, with no paid synthesis on save. Emotion
+controls remain deferred. Fish and separately configured Modal options remain.
 
 ## Daily quota
 
-The owner approved **1000 Replicate attempts per owner per calendar day** in
+The user approved **1000 Replicate attempts per user per calendar day** in
 `America/Los_Angeles`, replacing the lifetime 100-attempt guard.
 The quota resets at local midnight, including 23-hour and 25-hour DST days.
 Both preflight and paid submission enforce it under the owner lock.

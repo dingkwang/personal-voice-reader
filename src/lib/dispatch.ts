@@ -3,7 +3,6 @@ import { WorkflowRunNotFoundError } from "workflow/internal/errors";
 import { generateReading } from "@/workflows/generate";
 import { database } from "./db";
 import { requireJobProvider } from "./jobs";
-import { ownerSubject } from "./config";
 
 export async function dispatchJob(jobId: string, owner: string) {
   const db = database();
@@ -12,6 +11,7 @@ export async function dispatchJob(jobId: string, owner: string) {
      AND status IN ('queued','running') AND dispatch_after<=now() RETURNING run_id`, [owner, jobId]);
   if (!rows[0]) return;
   try {
+    await requireJobProvider(jobId, owner);
     if (rows[0].run_id) {
       try {
         const status = await getRun(rows[0].run_id).status;
@@ -29,13 +29,17 @@ export async function dispatchJob(jobId: string, owner: string) {
   }
 }
 export async function recoverDispatches() {
-  const owner = ownerSubject();
-  const { rows } = await database().query<{ id: string }>(
-    "SELECT id FROM jobs WHERE owner=$1 AND status IN ('queued','running') AND dispatch_after<=now() ORDER BY created_at LIMIT 10", [owner]);
+  // Round-robin tenants, oldest due first. The dispatch lease advances even for
+  // unavailable providers, so a broken tenant cannot starve later tenants.
+  const { rows } = await database().query<{ id: string; owner: string }>(`
+    SELECT id,owner FROM (
+      SELECT id,owner,dispatch_after,
+        row_number() OVER (PARTITION BY owner ORDER BY dispatch_after,created_at,id) AS turn
+      FROM jobs WHERE status IN ('queued','running') AND dispatch_after<=now()
+    ) due ORDER BY turn,dispatch_after,id LIMIT 10`);
   let checked = 0;
   for (const row of rows) {
-    try { await requireJobProvider(row.id, owner); } catch { continue; }
-    await dispatchJob(row.id, owner);
+    await dispatchJob(row.id, row.owner);
     checked++;
   }
   return checked;

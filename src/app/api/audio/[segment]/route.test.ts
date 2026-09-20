@@ -3,7 +3,7 @@ import { testDatabase, TEST_OWNER } from "@/test/database";
 import { makeDocument } from "@/lib/documents";
 import { addDocument } from "@/lib/store";
 import { GET } from "./route";
-import { parseRange } from "@/lib/blob";
+import { ownerPrefix, parseRange } from "@/lib/blob";
 vi.mock("@/lib/auth", () => ({ requireOwner: async () => TEST_OWNER }));
 vi.mock("@vercel/blob", () => ({
   get: vi.fn(async (_path: string, options: { headers?: { Range: string } }) => {
@@ -18,16 +18,17 @@ let segment: string;
 const original = "a".repeat(64), latest = "b".repeat(64);
 beforeEach(async () => {
   fixture = await testDatabase();
+  vi.stubEnv("AUTH0_OWNER_SUB", TEST_OWNER);
   const document = makeDocument({ text: "合成测试。" });
   segment = document.segments[0].id;
   document.segments[0].audioHash = latest;
   await addDocument(document, TEST_OWNER);
   for (const key of [original, latest]) {
-    await fixture.db.query("INSERT INTO audio_cache(owner,key,object_hash,pathname,size) VALUES($1,$2,$2,'audio/test',4)", [TEST_OWNER, key]);
+    await fixture.db.query("INSERT INTO audio_cache(owner,key,object_hash,pathname,size) VALUES($1,$2,$2,$3,4)", [TEST_OWNER, key, `audio/${ownerPrefix(TEST_OWNER)}/test`]);
     await fixture.db.query("INSERT INTO audio_versions VALUES($1,$2,$3)", [TEST_OWNER, segment, key]);
   }
 });
-afterEach(async () => fixture.close());
+afterEach(async () => { await fixture.close(); vi.unstubAllEnvs(); });
 const get = (version?: string, range?: string) => GET(
   new Request(`http://localhost/api/audio/${segment}${version ? `?v=${version}` : ""}`, { headers: range ? { Range: range } : {} }),
   { params: Promise.resolve({ segment }) });

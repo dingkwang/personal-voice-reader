@@ -1,5 +1,14 @@
 # Voice Note cloud runbook
 
+## Multi-user web implementation, 2026-09-19, not deployed
+
+[Multi-user web access](MULTI_USER_WEB.md) supersedes the web owner-only rules
+below. Valid tenant users get isolated readers; MCP stays owner-only.
+Keep the original database login and subject unchanged. Google connection
+enablement and a production custom Google OAuth client still need operator
+verification. No cloud settings or data were changed by this implementation.
+Historical deployment records below are not new publication authority.
+
 ## Current route: Replicate IndexTTS 2 — 2026-09-12
 
 Replicate replaces Modal for this Preview milestone. Schema 003, the private
@@ -90,8 +99,8 @@ No production Fish credential is in Preview. Temporary operator
 protection tokens used for checks were revoked.
 
 Next.js hosts the private reader and stateless MCP Streamable HTTP endpoint.
-Auth0 web sessions and separately validated Auth0 OAuth JWTs map to the exact
-`AUTH0_OWNER_SUB`. PostgreSQL stores voices, documents, segments, audio versions,
+Auth0 web sessions map to their verified immutable subjects. Separately validated
+MCP OAuth JWTs still require `AUTH0_OWNER_SUB`. PostgreSQL stores voices, documents, segments, audio versions,
 cache entries, jobs, request aliases, generation claims and upload reservations.
 The `pg` driver connects to Neon through its pooled TLS connection string.
 Vercel Workflow executes two lanes; database row locks and two claim slots enforce
@@ -153,8 +162,9 @@ assignments. The worker set preview `AUTH0_OWNER_SUB` and
 1. **First interactive preview login** (proves the owner session path): while
    logged into Vercel as `dingkwang`, open
    https://personal-voice-reader-preview-dingkangs-projects.vercel.app/auth/login
-   and sign in with the staging user. Any non-owner Auth0 user must receive
-   403. No worker can perform this step.
+   and sign in with the staging user. Under the multi-user web implementation,
+   another valid tenant user gets a separate empty reader and cannot access
+   the original user's resources. No worker can perform live login in this task.
 2. **ChatGPT callback registration** (staging): copy the exact callback URL
    from ChatGPT's connection setup onto client
    `3EeI3RgkslActTjSWGaUZ9SbGPSIhZ5X`; its secret goes only into ChatGPT's
@@ -287,8 +297,9 @@ localhost is correctly rejected on staging). Per-environment dashboard checks:
 4. Do not use wildcard production callbacks.
 5. Find Dingkang in Auth0 Users and set his exact `user_id` as `AUTH0_OWNER_SUB`.
    Email/name matching is intentionally not supported.
-6. Disable public sign-up if the tenant permits it. The app still rejects all
-   other subjects before saving a session and on every private route.
+6. Enable the existing Google connection for the web client, retaining the
+   original database connection. Follow [multi-user requirements](MULTI_USER_WEB.md).
+   Web access is no longer limited to the configured MCP owner.
 
 Web scopes are `openid profile`. Sessions expire after twelve hours and do not
 roll. `/auth/access-token` is disabled. An unauthenticated deep link redirects
@@ -363,7 +374,7 @@ The upload dry-run excludes `.data`, backups, all `.env*`, local evidence,
 test fixtures, downloaded skills, SWC/TypeScript cache files and generated
 Workflow routes. Workflow routes are regenerated during the cloud build.
 
-Verify anonymous rejection on every private API, wrong-owner denial, web login,
+Verify anonymous rejection on every private API, cross-user resource denial, web login,
 OAuth tool scopes, CSRF, private Blob access, Range 206/416, Workflow progress
 after closing the browser, retry and recovery, on isolated preview resources.
 Verify generated Workflow endpoints reject unsigned external invocations.

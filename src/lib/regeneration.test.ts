@@ -24,9 +24,9 @@ afterEach(async () => { await fixture.close(); vi.unstubAllEnvs(); });
 
 async function ready() {
   const source = await createReading({ text: "第一段合成测试。\n\n第二段合成测试。\n\n第三段合成测试。", title: "Synthetic",
-    speed: 1, idempotency_key: "source-request" });
+    speed: 1, idempotency_key: "source-request" }, TEST_OWNER);
   for (let i = 0; i < 3; i++) await generateNext(source.jobId, TEST_OWNER);
-  const document = await findDocument(source.documentId);
+  const document = await findDocument(source.documentId, TEST_OWNER);
   expect(document.segments).toHaveLength(3);
   return { ...source, document };
 }
@@ -39,27 +39,27 @@ it("forces one ready segment, copies untouched selected keys, and never reverts 
   const before = source.document.segments.map((item) => item.audioUrl);
   const request = input(source.jobId, { scope: "segment", segmentId: source.document.segments[1].id });
   const next = await regenerateDocument(source.documentId, request, TEST_OWNER);
-  const queued = await readingStatus(next.jobId);
+  const queued = await readingStatus(next.jobId, TEST_OWNER);
   expect(queued.regeneration).toBe(true);
   expect(queued.items.map((item) => item.status)).toEqual(["ready", "queued", "ready"]);
-  expect((await findDocument(source.documentId)).segments.map((item) => item.audioUrl)).toEqual(before);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl)).toEqual(before);
   await generateNext(next.jobId, TEST_OWNER);
   expect(mocks.synthesize).toHaveBeenCalledTimes(4);
-  const after = (await findDocument(source.documentId)).segments.map((item) => item.audioUrl);
+  const after = (await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl);
   expect(after[0]).toBe(before[0]); expect(after[2]).toBe(before[2]); expect(after[1]).not.toBe(before[1]);
-  const ordinary = await queueDocument({ documentId: source.documentId, voiceId: "voice_test", speed: 1, idempotencyKey: "ordinary-playback" });
+  const ordinary = await queueDocument({ documentId: source.documentId, voiceId: "voice_test", speed: 1, idempotencyKey: "ordinary-playback" }, TEST_OWNER);
   expect(await generateNext(ordinary.jobId, TEST_OWNER)).toBe("done");
   expect(mocks.synthesize).toHaveBeenCalledTimes(4);
-  expect((await findDocument(source.documentId)).segments.map((item) => item.audioUrl)).toEqual(after);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl)).toEqual(after);
   expect((await fixture.db.query("SELECT * FROM audio_versions")).rows).toHaveLength(4);
   expect((await fixture.db.query("SELECT * FROM audio_cache")).rows).toHaveLength(4);
   const another = await regenerateDocument(source.documentId, input(ordinary.jobId, {
     scope: "segment", segmentId: source.document.segments[0].id, idempotencyKey: "another-single",
   }), TEST_OWNER);
-  expect((await readingStatus(another.jobId)).items[1].audioUrl).toBe(after[1]);
+  expect((await readingStatus(another.jobId, TEST_OWNER)).items[1].audioUrl).toBe(after[1]);
   await generateNext(another.jobId, TEST_OWNER);
   expect(mocks.synthesize).toHaveBeenCalledTimes(5);
-  expect((await findDocument(source.documentId)).segments[1].audioUrl).toBe(after[1]);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments[1].audioUrl).toBe(after[1]);
 });
 it("regenerates every item and reports ordered results even when completions arrive out of order", async () => {
   const source = await ready();
@@ -70,7 +70,7 @@ it("regenerates every item and reports ordered results even when completions arr
   if (typeof a === "string" || typeof b === "string") throw new Error("Missing claims");
   for (const claim of [b, a]) await completeGeneration(claim, { objectHash: sha256(claim.key), pathname: `audio/${claim.key}`, size: 4 });
   await generateNext(next.jobId, TEST_OWNER);
-  const after = await readingStatus(next.jobId);
+  const after = await readingStatus(next.jobId, TEST_OWNER);
   expect(after.status).toBe("completed");
   expect(after.items.map((item) => item.segment_id)).toEqual(source.document.segments.map((item) => item.id));
   expect(after.items.every((item, i) => item.audioUrl !== source.document.segments[i].audioUrl)).toBe(true);
@@ -97,12 +97,12 @@ it("leaves every old playback/download version authorized on failure and support
   if (typeof claim === "string") throw new Error("Missing claim");
   await failedGeneration(claim);
   const before = source.document.segments.map((item) => item.audioUrl);
-  expect((await findDocument(source.documentId)).segments.map((item) => item.audioUrl)).toEqual(before);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl)).toEqual(before);
   const authorized = await fixture.db.query(`SELECT v.key FROM audio_versions v JOIN audio_cache c ON c.owner=v.owner AND c.key=v.key`);
   expect(authorized.rows).toHaveLength(3);
   await retrySegment(next.jobId, claim.segment.id, true, TEST_OWNER);
   await generateNext(next.jobId, TEST_OWNER);
-  expect((await findDocument(source.documentId)).segments[0].audioUrl).not.toBe(before[0]);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments[0].audioUrl).not.toBe(before[0]);
 });
 it("rejects cross-owner, invalid segment, changed voice/speed and unfinished requests transactionally", async () => {
   const source = await ready();
@@ -128,13 +128,13 @@ it("does not let late regenerated audio replace a newer settings selection", asy
   const next = await regenerateDocument(source.documentId, input(source.jobId), TEST_OWNER);
   const claim = await claimNext(next.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
-  const newer = await queueDocument({ documentId: source.documentId, voiceId: "voice_test", speed: 1.2, idempotencyKey: "new-settings" });
+  const newer = await queueDocument({ documentId: source.documentId, voiceId: "voice_test", speed: 1.2, idempotencyKey: "new-settings" }, TEST_OWNER);
   for (let i = 0; i < 3; i++) await generateNext(newer.jobId, TEST_OWNER);
   await completeGeneration(claim, { objectHash: sha256("late"), pathname: "audio/late", size: 4 });
-  expect((await findDocument(source.documentId)).segments.every((segment) => segment.speed === 1.2)).toBe(true);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments.every((segment) => segment.speed === 1.2)).toBe(true);
 });
 it("keeps superseded retries from selecting old audio and rejects single regeneration with missing untouched audio", async () => {
-  const source = await createReading({ text: "第一段合成。\n\n第二段合成。", speed: 1, idempotency_key: "partial-source" });
+  const source = await createReading({ text: "第一段合成。\n\n第二段合成。", speed: 1, idempotency_key: "partial-source" }, TEST_OWNER);
   const claim = await claimNext(source.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
   await failedGeneration(claim);
@@ -145,10 +145,10 @@ it("keeps superseded retries from selecting old audio and rejects single regener
     .rejects.toMatchObject({ code: "AUDIO_NOT_READY" });
   const next = await regenerateDocument(source.documentId, input(source.jobId), TEST_OWNER);
   for (let i = 0; i < 2; i++) await generateNext(next.jobId, TEST_OWNER);
-  const selected = (await findDocument(source.documentId)).segments.map((item) => item.audioUrl);
+  const selected = (await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl);
   await retrySegment(source.jobId, claim.segment.id, true, TEST_OWNER);
   await generateNext(source.jobId, TEST_OWNER);
-  expect((await findDocument(source.documentId)).segments.map((item) => item.audioUrl)).toEqual(selected);
+  expect((await findDocument(source.documentId, TEST_OWNER)).segments.map((item) => item.audioUrl)).toEqual(selected);
 });
 it("supports legacy Fish sessions without a job and validates explicit scope and billing acknowledgement", async () => {
   const source = await ready();

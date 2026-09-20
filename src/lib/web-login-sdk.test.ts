@@ -45,9 +45,9 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-async function callback(sub: string, returnTo = "/sessions/doc_safe") {
-  token = await new SignJWT({ sub, nonce: "synthetic-nonce" }).setProtectedHeader({ alg: "RS256", kid: "synthetic-key" })
-    .setIssuer(issuer).setAudience("synthetic-web").setIssuedAt().setExpirationTime("5m").sign(keys.privateKey);
+async function callback(sub: string, returnTo = "/sessions/doc_safe", claims: { iss?: string; aud?: string; exp?: string; nonce?: string } = {}) {
+  token = await new SignJWT({ sub, nonce: claims.nonce || "synthetic-nonce" }).setProtectedHeader({ alg: "RS256", kid: "synthetic-key" })
+    .setIssuer(claims.iss || issuer).setAudience(claims.aud || "synthetic-web").setIssuedAt().setExpirationTime(claims.exp || "5m").sign(keys.privateKey);
   const key = new Uint8Array(hkdfSync("sha256", secret, "", "JWE CEK", 32));
   const transaction = await new EncryptJWT({
     state: "synthetic-state", nonce: "synthetic-nonce", codeVerifier: "synthetic-verifier",
@@ -58,20 +58,34 @@ async function callback(sub: string, returnTo = "/sessions/doc_safe") {
   }));
 }
 
-it.each(["auth0|other", "auth0|owner-extra", "google-oauth2|owner"])("runs the exact SDK owner guard before any rejected session is stored", async (subject) => {
+it.each(["auth0|other", "auth0|owner-extra", "google-oauth2|owner"])("accepts a verified tenant subject without linking identities: %s", async (subject) => {
   const response = await callback(subject);
-  expect(response.status).toBe(403);
-  expect(response.headers.has("set-cookie")).toBe(false);
-  expect(response.headers.has("location")).toBe(false);
-  expect(await response.text()).toContain("使用其他账号登录");
+  expect(response.status).toBe(307);
+  expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session"))).toBe(true);
+  expect(response.headers.get("location")).toBe(`${origin}/sessions/doc_safe`);
 });
 
-it("accepts only the exact owner and preserves safe session deep links", async () => {
+it("retains the original database owner's login and safe session deep links", async () => {
   const response = await callback("auth0|owner");
   expect(response.status).toBe(307);
   expect(response.headers.get("location")).toBe(`${origin}/sessions/doc_safe`);
   expect(response.headers.has("set-cookie")).toBe(true);
   expect(response.headers.get("cache-control")).toBe("no-store");
+});
+
+it.each([{ iss: "https://other.auth0.com/" }, { aud: "other-client" }, { exp: "-5m" }, { nonce: "wrong" }])(
+  "keeps SDK issuer, audience, expiry and nonce validation", async (claims) => {
+    const response = await callback("google-oauth2|synthetic", "/", claims);
+    expect(response.status).toBe(400);
+    expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session"))).toBe(false);
+    expect(response.headers.has("location")).toBe(false);
+  },
+);
+
+it.each(["", "   "])("does not store an identity-less session", async (sub) => {
+  const response = await callback(sub);
+  expect(response.status).toBeGreaterThanOrEqual(400);
+  expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session"))).toBe(false);
 });
 
 it.each(["//evil.test", "/auth/login", "/sessions/doc_safe?code=synthetic-private"])(

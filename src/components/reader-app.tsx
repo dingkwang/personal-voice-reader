@@ -19,6 +19,7 @@ import {
 } from "@/components/icons";
 import { api, useReader } from "@/components/use-reader";
 import type { Voice } from "@/lib/types";
+import { encodePcmWav } from "@/lib/wav";
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -26,16 +27,16 @@ function formatTime(seconds: number) {
   return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
 }
 
-export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
+export function ReaderApp({ storageScope, initialSessionId }: { storageScope: string; initialSessionId?: string }) {
   const {
     text, title, document, history, historyLoading, historyError, refreshHistory,
     loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
-    voices, voiceId, speed, changeSettings, addVoice, voiceError,
+    voices, voiceId, speed, changeSettings, addVoice, voiceError, canLinkFishVoice,
     activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
     job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,
     regenerate, regenerationDisabledReason, regenerating, pendingRegeneration, recoverRegeneration, recoveryDisabledReason,
-  } = useReader(initialSessionId);
+  } = useReader(storageScope, initialSessionId);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const editorDisabled = isSaving || Boolean(loadingId);
   const queueDisabled = editorDisabled || isDirty;
@@ -56,7 +57,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
           <small>VOICE NOTE</small>
         </a>
         <div className="header-actions">
-          <span className="private-chip"><span /> Dingkang · 私人会话</span>
+          <span className="private-chip"><span /> 我的私密会话</span>
           {/* Full navigation disposes private playback state and runs Auth0 logout. */}
           {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/auth/logout" className="text-button">退出</a>
@@ -73,7 +74,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             <button className="text-button" onClick={() => void refreshHistory()} disabled={historyLoading}>刷新</button>
           </div>
           <button className="new-session-button" onClick={newSession} disabled={isSaving}><PlusIcon size={18} />新建会话</button>
-          <p className="history-caption">私人云端保存，随时回来继续听。</p>
+          <p className="history-caption">仅自己的账号可见，随时回来继续听。</p>
           {historyLoading && <p className="history-status" role="status">正在加载会话列表…</p>}
           {historyError && <div className="history-status" role="alert">{historyError}<button className="text-button" onClick={() => void refreshHistory()}>重试列表</button></div>}
           {!historyLoading && !historyError && !history.length && <p className="history-status">还没有会话。粘贴文字后点击「保存会话」，留待下次朗读。</p>}
@@ -160,6 +161,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
               </button>
             </div>
             <button className="add-voice-inline" disabled={!voiceId} onClick={() => void makeWebDefault()}>设为网页默认</button>
+            {!voices.length && !voiceError && <p>还没有声音。点击「添加」上传自己的录音。</p>}
           </div>
           <div className="control-field speed-field">
             <div className="field-label-row"><label htmlFor="speed">语速</label><strong>{speed}×</strong></div>
@@ -180,7 +182,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
             {isPreparing ? <span className="spinner" /> : isPlaying ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
             {isPreparing ? "正在准备音频…" : isPlaying ? "暂停朗读" : "开始朗读"}
           </button>
-          <p className="cost-note"><CheckIcon size={14} /> 相同文字和设置会自动使用缓存</p>
+          <p className="cost-note"><CheckIcon size={14} /> 相同文字和设置会使用自己的缓存。IndexTTS 2 每人每天最多 1,000 次生成尝试，失败也计入，洛杉矶零点重置；缓存和播放不计次。</p>
         </section>
 
         {voiceError && <div className="notice" role="alert">{voiceError}</div>}
@@ -274,6 +276,7 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
 
       {showVoiceModal && (
         <VoiceModal
+          canLinkFishVoice={canLinkFishVoice}
           onClose={() => setShowVoiceModal(false)}
           onCreated={(voice) => {
             addVoice(voice);
@@ -285,12 +288,12 @@ export function ReaderApp({ initialSessionId }: { initialSessionId?: string }) {
   );
 }
 
-function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (voice: Voice) => void }) {
+function VoiceModal({ onClose, onCreated, canLinkFishVoice }: { onClose: () => void; onCreated: (voice: Voice) => void; canLinkFishVoice: boolean }) {
   const [name, setName] = useState("");
   const [providerVoiceId, setProviderVoiceId] = useState("");
   const [audio, setAudio] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
-  const [provider, setProvider] = useState<"indextts" | "fish">("fish");
+  const [provider, setProvider] = useState<"replicate" | "indextts" | "fish">("replicate");
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -301,7 +304,7 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   const recordingStartedAtRef = useRef(0);
   const mountedRef = useRef(true);
   const cloneRequestRef = useRef<{ signature: string; input: {
-    name: string; language: string; consent: boolean; uploadIds: string[]; idempotencyKey: string; provider: "indextts" | "fish";
+    name: string; language: string; consent: boolean; uploadIds: string[]; idempotencyKey: string; provider: "replicate" | "indextts" | "fish";
   } } | null>(null);
 
   async function toggleRecording() {
@@ -368,8 +371,8 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return setError("请给声音起一个名字");
-    if (provider === "indextts" && audio.length !== 1) return setError("请上传一段 10–60 秒的参考录音");
-    if (!audio.length && !providerVoiceId.trim()) return setError("请录音、上传音频，或填写已有 Fish Voice ID");
+    if (provider !== "fish" && audio.length !== 1) return setError(provider === "replicate" ? "请上传一段 10–20 秒的参考录音" : "请上传一段 10–60 秒的参考录音");
+    if (!audio.length && (!canLinkFishVoice || !providerVoiceId.trim())) return setError("请录音或上传自己的音频");
     if (audio.length && !consent) return setError("请确认你拥有并获准克隆这个声音");
     setSaving(true);
     setError("");
@@ -380,7 +383,8 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
         if (cloneRequestRef.current?.signature !== signature) {
           const { upload } = await import("@vercel/blob/client");
           const uploadIds: string[] = [];
-          for (const file of audio) {
+          for (const original of audio) {
+            const file = provider === "replicate" ? await prepareReplicateReference(original) : original;
             const reservation = await api<{ id: string; pathname: string }>("/api/uploads", {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ size: file.size, contentType: file.type.split(";")[0] }),
@@ -416,9 +420,9 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
         <button className="modal-close" onClick={onClose} aria-label="关闭"><CloseIcon /></button>
         <p className="eyebrow">创建专属声音</p>
         <h2 id="voice-title">添加一个声音</h2>
-        <p className="modal-lead">{provider === "indextts" ? "上传一段 10–60 秒清晰人声。保存后将作为网页默认声音。" : "录制清晰人声或连接已有 Fish Voice ID。"}</p>
+        <p className="modal-lead">{provider === "replicate" ? "上传或录制 10–20 秒清晰人声。录音在浏览器转换格式，仅保存到自己的账号，不调用付费生成。" : provider === "indextts" ? "上传一段 10–60 秒清晰人声。保存后将作为网页默认声音。" : "上传自己的录音以创建 Fish 声音，可能产生费用。"}</p>
         <form onSubmit={submit}>
-          <label className="form-label">语音服务<select value={provider} disabled={saving || recording} onChange={(event) => { setProvider(event.target.value as "indextts" | "fish"); setAudio([]); setError(""); }}><option value="indextts">IndexTTS-2.5</option><option value="fish">Fish Audio</option></select></label>
+          <label className="form-label">语音服务<select value={provider} disabled={saving || recording} onChange={(event) => { setProvider(event.target.value as "replicate" | "indextts" | "fish"); setAudio([]); setError(""); }}><option value="replicate">IndexTTS 2</option><option value="indextts">IndexTTS-2.5</option><option value="fish">Fish Audio</option></select></label>
           <label className="form-label">声音名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：我的声音" maxLength={60} /></label>
           <div className={`record-zone ${recording ? "recording" : ""}`}>
             <button type="button" className="record-button" onClick={() => void toggleRecording()}>
@@ -426,11 +430,11 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
             </button>
             <div>
               <strong>{recording ? `正在录音 ${recordingSeconds} 秒，点击结束` : audio.length ? "录音已经准备好" : "用手机录一段"}</strong>
-              <span>{audio.length ? `${audio.length} 段 · ${(audio.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024).toFixed(1)} MB` : "安静环境下自然说话 30–60 秒"}</span>
+              <span>{audio.length ? `${audio.length} 段 · ${(audio.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024).toFixed(1)} MB` : provider === "replicate" ? "安静环境下自然说话 10–20 秒" : "安静环境下自然说话 30–60 秒"}</span>
             </div>
-            <label className="file-pill">上传<input type="file" accept="audio/*" multiple={provider === "fish"} onChange={(event) => setAudio(Array.from(event.target.files || []).slice(0, provider === "indextts" ? 1 : 20))} /></label>
+            <label className="file-pill">上传<input type="file" accept="audio/*" multiple={provider === "fish"} onChange={(event) => setAudio(Array.from(event.target.files || []).slice(0, provider === "fish" ? 20 : 1))} /></label>
           </div>
-          {provider === "fish" && <><div className="or-divider"><span>或者连接已有声音</span></div>
+          {provider === "fish" && canLinkFishVoice && <><div className="or-divider"><span>或者连接已有声音</span></div>
           <label className="form-label">Fish Voice ID<input value={providerVoiceId} onChange={(event) => setProviderVoiceId(event.target.value)} placeholder="例如 98abc…" disabled={Boolean(audio.length)} /></label></>}
           {Boolean(audio.length) && <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>我确认这是我的声音，或我已获得声音所有者的明确授权。</span></label>}
           {error && <p className="form-error">{error}</p>}
@@ -439,4 +443,20 @@ function VoiceModal({ onClose, onCreated }: { onClose: () => void; onCreated: (v
       </div>
     </div>
   );
+}
+
+async function prepareReplicateReference(file: File) {
+  if (file.size > 20 * 1024 * 1024) throw new Error("录音不能超过 20 MB");
+  const context = new AudioContext();
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    if (decoded.duration < 10 || decoded.duration > 20) throw new Error("请使用 10–20 秒的参考录音");
+    const offline = new OfflineAudioContext(1, Math.round(decoded.duration * 24_000), 24_000);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start();
+    const normalized = await offline.startRendering();
+    return new File([encodePcmWav(normalized.getChannelData(0))], "reference.wav", { type: "audio/wav" });
+  } finally { await context.close(); }
 }

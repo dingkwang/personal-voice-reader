@@ -19,7 +19,7 @@ beforeEach(async () => {
     AUTH0_CLIENT_ID: "synthetic", AUTH0_CLIENT_SECRET: "synthetic", AUTH0_SECRET: "0".repeat(64) })) vi.stubEnv(key, value);
   mock.session.mockReset().mockResolvedValue({ user: { sub: TEST_OWNER } });
   mock.after.mockReset();
-  const source = await createReading({ text: "合成接口测试。", speed: 1, idempotency_key: "source-request" });
+  const source = await createReading({ text: "合成接口测试。", speed: 1, idempotency_key: "source-request" }, TEST_OWNER);
   documentId = source.documentId;
   const claim = await claimNext(source.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
@@ -40,7 +40,7 @@ it("requires owner cookies and same-origin CSRF before enqueue or dispatch", asy
   mock.session.mockResolvedValue(null);
   expect((await post()).status).toBe(401);
   mock.session.mockResolvedValue({ user: { sub: "auth0|other" } });
-  expect((await post()).status).toBe(403);
+  expect((await post()).status).toBe(404);
   expect(mock.after).not.toHaveBeenCalled();
   expect((await fixture.db.query("SELECT * FROM jobs")).rows).toHaveLength(1);
 });

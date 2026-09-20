@@ -17,19 +17,27 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 type Draft = { text: string; title: string };
 const emptyDraft: Draft = { text: "", title: "" };
-const regenerationStorageKey = (id: string) => `voice-note:regeneration:v1:${id}`;
-function storedRegeneration(id: string): RegenerateInput | null {
-  const raw = localStorage.getItem(regenerationStorageKey(id));
-  if (!raw) return null;
+const regenerationStorageKey = (scope: string, id: string) => `voice-note:regeneration:v2:${scope}:${id}`;
+const legacyRegenerationStorageKey = (id: string) => `voice-note:regeneration:v1:${id}`;
+function storedRegeneration(scope: string, id: string, allowLegacy: boolean): RegenerateInput | null {
+  const current = localStorage.getItem(regenerationStorageKey(scope, id));
+  // The server enables this only for the original subject. Call only after the
+  // document GET has verified ownership. Existing v2, even malformed, wins.
+  const raw = current ?? (allowLegacy ? localStorage.getItem(legacyRegenerationStorageKey(id)) : null);
+  if (raw === null) return null;
   const value = JSON.parse(raw) as RegenerateInput;
-  if (!["segment", "all"].includes(value.scope) || typeof value.idempotencyKey !== "string" ||
-    typeof value.voiceId !== "string" || typeof value.speed !== "number" || value.acknowledgeBilling !== true ||
-    !(value.sourceJobId === null || typeof value.sourceJobId === "string") ||
-    (value.scope === "segment" && typeof value.segmentId !== "string")) throw new Error("Invalid regeneration request");
+  const bounded = (input: unknown, min: number, max: number) => typeof input === "string" && input.length >= min && input.length <= max;
+  if (!value || !["segment", "all"].includes(value.scope) || !bounded(value.idempotencyKey, 8, 160) ||
+    !bounded(value.voiceId, 5, 120) || !Number.isFinite(value.speed) || value.speed < 0.5 || value.speed > 2 ||
+    value.acknowledgeBilling !== true || !(value.sourceJobId === null || bounded(value.sourceJobId, 5, 100)) ||
+    (value.scope === "segment" ? !bounded(value.segmentId, 5, 100) : value.segmentId !== undefined)) throw new Error("Invalid regeneration request");
+  // Keep the legacy copy until a definite result. Failed reads/writes propagate
+  // to the conservative uncertainty guard, never a fresh paid request.
+  if (current === null) localStorage.setItem(regenerationStorageKey(scope, id), raw);
   return value;
 }
 
-export function useReader(initialSessionId?: string) {
+export function useReader(storageScope: string, initialSessionId?: string) {
   const [draft, setDraft] = useState(emptyDraft);
   const [source, setSource] = useState(emptyDraft);
   const [document, setDocument] = useState<PublicDocument | null>(null);
@@ -40,6 +48,7 @@ export function useReader(initialSessionId?: string) {
   const [detailError, setDetailError] = useState<{ id: string; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [canLinkFishVoice, setCanLinkFishVoice] = useState(false);
   const [voiceId, setVoiceId] = useState("");
   const defaultVoiceRef = useRef("");
   const [speed, setSpeed] = useState(1);
@@ -61,6 +70,7 @@ export function useReader(initialSessionId?: string) {
   const savedJobRef = useRef<JobStatus | null>(null);
   const savedSettingsRef = useRef<{ voiceId: string; speed: number } | null>(null);
   const pendingRegenerationRef = useRef<RegenerateInput | null>(null);
+  const legacyRecoveryDocumentRef = useRef<string | null>(null);
 
   // Refs change in event handlers, not effects: even same-tick actions see
   // the new session/settings and cannot adopt an older async completion.
@@ -213,10 +223,11 @@ export function useReader(initialSessionId?: string) {
     let cancelled = false;
     void loadHistory();
     openInitial();
-    api<{ voices: Voice[]; defaultVoiceId?: string }>("/api/voices")
-      .then(({ voices: items, defaultVoiceId }) => {
+    api<{ voices: Voice[]; defaultVoiceId?: string; canLinkFishVoice?: boolean }>("/api/voices")
+      .then(({ voices: items, defaultVoiceId, canLinkFishVoice }) => {
         if (cancelled) return;
         setVoices(items);
+        setCanLinkFishVoice(canLinkFishVoice === true);
         defaultVoiceRef.current = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
         if (!settingsRef.current.voiceId) {
           const id = items.find((voice) => voice.id === defaultVoiceId)?.id || items[0]?.id || "";
@@ -313,7 +324,9 @@ export function useReader(initialSessionId?: string) {
     setDetailError(null);
     setMessage("");
     try {
-      const { document: loaded, job: savedJob } = await api<{ document: PublicDocument & { originalText: string }; job: JobStatus | null }>(
+      const { document: loaded, job: savedJob, allowLegacyRecovery } = await api<{
+        document: PublicDocument & { originalText: string }; job: JobStatus | null; allowLegacyRecovery?: boolean;
+      }>(
         `/api/documents/${encodeURIComponent(id)}`,
       );
       if (session !== sessionRef.current) return;
@@ -333,20 +346,21 @@ export function useReader(initialSessionId?: string) {
       savedSettingsRef.current = savedJob ? { voiceId: savedJob.voice_id, speed: savedJob.speed } :
         ready ? { voiceId: ready.voiceId!, speed: ready.speed! } : null;
       setSavedSettings(savedSettingsRef.current);
-      if (!inFlightRef.current.size) setUnfinishedRequest(false);
-      pendingRegenerationRef.current = null;
-      setPendingRegeneration(null);
-      try {
-        pendingRegenerationRef.current = storedRegeneration(loaded.id);
-        setPendingRegeneration(pendingRegenerationRef.current);
-      } catch {
-        setMessage("无法读取重新生成请求记录。请恢复浏览器存储后重新打开会话，避免重复计费。");
-        setUnfinishedRequest(true);
-      }
       if (ready) changeSettings({ voiceId: ready.voiceId!, speed: ready.speed! });
       if (savedJob) {
         changeSettings({ voiceId: savedJob.voice_id, speed: savedJob.speed });
         watchJob(savedJob, generationRef.current);
+      }
+      if (!inFlightRef.current.size) setUnfinishedRequest(false);
+      pendingRegenerationRef.current = null;
+      setPendingRegeneration(null);
+      legacyRecoveryDocumentRef.current = allowLegacyRecovery === true ? loaded.id : null;
+      try {
+        pendingRegenerationRef.current = storedRegeneration(storageScope, loaded.id, allowLegacyRecovery === true);
+        setPendingRegeneration(pendingRegenerationRef.current);
+      } catch {
+        setMessage("无法读取重新生成请求记录。请恢复浏览器存储后重新打开会话，避免重复计费。");
+        setUnfinishedRequest(true);
       }
       window.history.replaceState(null, "", `/sessions/${loaded.id}`);
     } catch {
@@ -651,10 +665,10 @@ export function useReader(initialSessionId?: string) {
   }
 
   function addVoice(voice: Voice) {
-    if (voice.provider === "indextts") defaultVoiceRef.current = voice.id;
+    if (["indextts", "replicate"].includes(voice.provider)) defaultVoiceRef.current = voice.id;
     setVoices((items) => [...items, voice]);
     setVoiceError("");
-    changeSettings({ ...settingsRef.current, voiceId: voice.id });
+    changeSettings({ ...settingsRef.current, voiceId: voice.id, speed: voice.provider === "replicate" ? 1 : settingsRef.current.speed });
   }
 
   function seek(seconds: number) {
@@ -747,10 +761,20 @@ export function useReader(initialSessionId?: string) {
     isDirty ? "请先还原未保存的文字或标题，再恢复原请求" :
     pendingRegeneration && (voiceId !== pendingRegeneration.voiceId || speed !== pendingRegeneration.speed)
       ? "请先还原原请求的声音和语速，再恢复原请求" : "";
+  function clearResolvedRegeneration(id: string, input: RegenerateInput, allowLegacy: boolean) {
+    if (allowLegacy) {
+      const key = legacyRegenerationStorageKey(id);
+      // Do not remove a different/malformed legacy record. Never clear either
+      // copy for network/5xx failures. Delete v2 last if storage becomes unusable.
+      if (localStorage.getItem(key) === JSON.stringify(input)) localStorage.removeItem(key);
+    }
+    localStorage.removeItem(regenerationStorageKey(storageScope, id));
+  }
 
   async function submitRegeneration(input: RegenerateInput) {
     const current = documentRef.current;
     if (!current || regenerateRef.current) return;
+    const allowLegacy = legacyRecoveryDocumentRef.current === current.id;
     regenerateRef.current = true;
     setRegenerating(true);
     const session = sessionRef.current;
@@ -765,13 +789,13 @@ export function useReader(initialSessionId?: string) {
     setMessage("");
     try {
       // Persist before sending. A lost HTTP response must never lead to a fresh paid request.
-      localStorage.setItem(regenerationStorageKey(current.id), JSON.stringify(input));
+      localStorage.setItem(regenerationStorageKey(storageScope, current.id), JSON.stringify(input));
       pendingRegenerationRef.current = input;
       setPendingRegeneration(input);
       const { job: next } = await api<{ job: JobStatus }>(`/api/documents/${current.id}/regenerate`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
       });
-      localStorage.removeItem(regenerationStorageKey(current.id));
+      clearResolvedRegeneration(current.id, input, allowLegacy);
       if (session !== sessionRef.current || current.id !== documentRef.current?.id) return;
       pendingRegenerationRef.current = null;
       setPendingRegeneration(null);
@@ -780,7 +804,7 @@ export function useReader(initialSessionId?: string) {
       // Only a definite rejection permits a new operation. Network/5xx failures keep the key.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
         try {
-          localStorage.removeItem(regenerationStorageKey(current.id));
+          clearResolvedRegeneration(current.id, input, allowLegacy);
           if (current.id === documentRef.current?.id) {
             pendingRegenerationRef.current = null;
             setPendingRegeneration(null);
@@ -814,7 +838,7 @@ export function useReader(initialSessionId?: string) {
   return {
     ...draft, document, history, historyLoading, historyError, refreshHistory,
     loadingId, detailError, selectSession, newSession, isSaving, saveDocument, isDirty,
-    voices, voiceId, speed, changeSettings, addVoice, voiceError,
+    voices, voiceId, speed, changeSettings, addVoice, voiceError, canLinkFishVoice,
     activeIndex, isPlaying, isPreparing, time, totalDuration, loopAll, message, setMessage,
     changeDraft, importFile, togglePlayback, loadSegment, goPrevious, goNext, seek,
     job, retryFailed, makeWebDefault, toggleLoop, downloadDocument,

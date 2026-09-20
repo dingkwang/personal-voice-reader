@@ -3,14 +3,14 @@ import { AuthorizationCodeGrantError, AuthorizationCodeGrantRequestError, Author
   DiscoveryError, InvalidConfigurationError, InvalidStateError, MissingStateError, OAuth2Error,
   AccessTokenError, AccessTokenErrorCode } from "@auth0/nextjs-auth0/errors";
 import { AppError } from "./errors";
-import { loginFailureKind, loginFailureResponse, OwnerLoginRejected, safeLoginReturnTo } from "./web-login";
+import { loginFailureKind, loginFailureResponse, InvalidWebSession, safeLoginReturnTo } from "./web-login";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reserves owner denial for the explicit owner guard, not provider access_denied", () => {
-  expect(loginFailureKind(new OwnerLoginRejected())).toBe("owner");
+it("distinguishes invalid sessions from provider access_denied without an owner allowlist", () => {
+  expect(loginFailureKind(new InvalidWebSession())).toBe("session");
   expect(loginFailureKind(new AppError("synthetic", 403, "FORBIDDEN"))).toBe("unknown");
-  expect(loginFailureKind({ code: "OWNER_LOGIN_REJECTED" })).toBe("unknown");
+  expect(loginFailureKind({ code: "INVALID_WEB_SESSION" })).toBe("unknown");
   const denied = new AuthorizationError({ cause: new OAuth2Error({ code: "access_denied" }) });
   expect(loginFailureKind(denied)).toBe("authorization");
 });
@@ -50,8 +50,8 @@ it("sanitizes unknown errors and SDK causes without logging or reflecting input"
 });
 
 it("provides manual, fixed same-origin recovery links without retry scripts", async () => {
-  const response = loginFailureResponse(new OwnerLoginRejected());
-  expect(response.status).toBe(403);
+  const response = loginFailureResponse(new InvalidWebSession());
+  expect(response.status).toBe(401);
   const body = await response.text();
   expect(body).toContain('href="/auth/login?prompt=login"');
   expect(body).toContain("使用其他账号登录");

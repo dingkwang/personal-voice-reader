@@ -38,11 +38,11 @@ it("allows the owner guard and document reads with real config validation and no
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ documents: [] });
 });
-it("still rejects missing sessions, wrong users and wrong resource environments", async () => {
+it("accepts tenant users but still rejects missing sessions and wrong resource environments", async () => {
   mock.session.mockResolvedValue(null);
   await expect(requireOwner()).rejects.toMatchObject({ status: 401 });
   mock.session.mockResolvedValue({ user: { sub: "auth0|other" } });
-  await expect(requireOwner()).rejects.toMatchObject({ status: 403 });
+  expect(await requireOwner()).toBe("auth0|other");
   mock.session.mockResolvedValue({ user: { sub: "auth0|owner" } });
   mock.query.mockResolvedValue({ rows: [{ project: "personal-voice-reader", environment: "production" }] });
   await expect(requireOwner()).rejects.toMatchObject({ code: "RESOURCE_MISMATCH" });

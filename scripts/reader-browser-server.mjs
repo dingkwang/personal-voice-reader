@@ -27,7 +27,7 @@ await writeFile(path.join(fixture, "src/app/[[...path]]/page.tsx"), `
 import { ReaderApp } from "@/components/reader-app";
 export default async function Page({ params }: { params: Promise<{ path?: string[] }> }) {
   const { path } = await params;
-  return <ReaderApp initialSessionId={path?.[0] === "sessions" ? path[1] : undefined} />;
+  return <ReaderApp storageScope="synthetic-reader" initialSessionId={path?.[0] === "sessions" ? path[1] : undefined} />;
 }`);
 const server = spawn(process.execPath, [
   path.join(root, "node_modules/next/dist/bin/next"), "dev", "--webpack",

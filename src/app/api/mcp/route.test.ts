@@ -7,6 +7,7 @@ vi.mock("next/server", () => ({ after: vi.fn() }));
 let fixture: Awaited<ReturnType<typeof testDatabase>>;
 beforeEach(async () => {
   fixture = await testDatabase();
+  vi.stubEnv("AUTH0_OWNER_SUB", TEST_OWNER);
   vi.stubEnv("DEFAULT_VOICE_ID", "voice_test");
   vi.stubEnv("APP_BASE_URL", "https://synthetic.test");
   mocks.scopes = ["read:voices", "create:readings", "read:readings"];
