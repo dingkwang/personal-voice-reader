@@ -1,6 +1,7 @@
 import { AppError } from "./errors";
 import { database, ownerLock, type Database } from "./db";
 import type { ReaderDocument, Segment, StoreData, Voice } from "./types";
+import { ensurePresetVoice, PRESET_VOICE_ID } from "./preset-voice";
 
 export async function listVoices(owner: string, db = database()): Promise<Voice[]> {
   const { rows } = await db.query<{ data: Voice }>("SELECT data FROM voices WHERE owner=$1", [owner]);
@@ -10,6 +11,9 @@ export async function listVoices(owner: string, db = database()): Promise<Voice[
     Number(a.source === "default") - Number(b.source === "default") || b.createdAt.localeCompare(a.createdAt));
 }
 export async function findVoice(id: string, owner: string, db = database()): Promise<Voice> {
+  if (id === PRESET_VOICE_ID) {
+    await ensurePresetVoice(owner, db);
+  }
   const { rows } = await db.query<{ data: Voice }>("SELECT data FROM voices WHERE owner=$1 AND id=$2", [owner, id]);
   if (!rows[0]) throw new AppError("找不到这个声音", 404, "VOICE_NOT_FOUND");
   return rows[0].data;

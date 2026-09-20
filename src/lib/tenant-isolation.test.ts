@@ -17,6 +17,7 @@ import { reserveUpload } from "./uploads";
 import { generateNext } from "@/workflows/steps";
 import { ownerPrefix } from "./blob";
 import { encodePcmWav } from "./wav";
+import { PRESET_VOICE, PRESET_VOICE_ID } from "./preset-voice";
 
 const mock = vi.hoisted(() => ({
   session: vi.fn(), after: vi.fn(), dispatch: vi.fn(), recover: vi.fn(),
@@ -86,8 +87,12 @@ it("starts a Google user empty, keeps the legacy owner intact, and saves only to
   const before = await snapshot();
   session(other);
   expect(await (await documents()).json()).toEqual({ documents: [] });
-  expect(await (await voices()).json()).toEqual({ voices: [], defaultVoiceId: null, canLinkFishVoice: false });
-  expect(await snapshot()).toEqual(before); // Reads do not create a tenant.
+  expect(await snapshot()).toEqual(before); // Document reads do not create a tenant.
+  expect(await (await voices()).json()).toEqual({
+    voices: [{ ...PRESET_VOICE, available: true }],
+    defaultVoiceId: PRESET_VOICE_ID,
+    canLinkFishVoice: false,
+  });
   const created = await save(request("/api/documents", { text: "新的合成文章", owner: TEST_OWNER }));
   expect(created.status).toBe(201);
   const id = (await created.json()).document.id;
@@ -98,7 +103,9 @@ it("starts a Google user empty, keeps the legacy owner intact, and saves only to
   const original = await document(request("/"), context(old.documentId));
   expect(original.status).toBe(200);
   expect((await original.json()).allowLegacyRecovery).toBe(true);
-  expect((await (await voices()).json()).defaultVoiceId).toBe("voice_test");
+  const legacyVoices = await (await voices()).json();
+  expect(legacyVoices.defaultVoiceId).toBe(PRESET_VOICE_ID);
+  expect(legacyVoices.voices.some((v: { id: string }) => v.id === "voice_test")).toBe(true);
   expect((await fixture.db.query("SELECT id FROM owners")).rows).toHaveLength(2);
 });
 

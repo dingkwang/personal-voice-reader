@@ -20,7 +20,7 @@ OAuth registrations are unchanged.
 
 ## Reader and voice ownership
 
-- New users start with no documents, voices or default voice.
+- New users start with no documents. The approved built-in preset voice (御女茉莉, Fish ID `6ce7ea8ada884bf3889fa7c7fb206691`) is provisioned per authenticated owner as the default fallback. Explicit saved user default preferences win.
 - Users can upload or record a 10–20 second Replicate reference. The browser
   converts it to mono 24 kHz PCM16 WAV. The server validates the format, duration,
   reserved upload, size and owner before saving a private reference.
