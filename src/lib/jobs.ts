@@ -100,11 +100,14 @@ export async function regenerateDocument(documentId: string, input: RegenerateIn
   });
 }
 
-export async function createReading(input: CreateInput, owner = ownerSubject()) {
-  const voiceId = input.voice_id || required("DEFAULT_VOICE_ID");
+export async function createReading(input: CreateInput, owner: string) {
+  // Only MCP's original owner retains the configured default. Web generation
+  // requires an explicitly selected, owned voice through queueDocument.
+  const voiceId = input.voice_id || (owner === ownerSubject() ? required("DEFAULT_VOICE_ID") : "");
+  if (!voiceId) throw new AppError("请先添加并选择自己的声音", 422, "VOICE_REQUIRED");
   return enqueue({ ...input, voiceId, idempotencyKey: input.idempotency_key }, owner);
 }
-export async function queueDocument(input: QueueInput, owner = ownerSubject()) {
+export async function queueDocument(input: QueueInput, owner: string) {
   return enqueue(input, owner);
 }
 async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; idempotencyKey: string }), owner: string) {
@@ -169,7 +172,7 @@ async function enqueue(input: QueueInput | (CreateInput & { voiceId: string; ide
   });
 }
 
-export async function readingStatus(id: string, owner = ownerSubject()): Promise<JobStatus> {
+export async function readingStatus(id: string, owner: string): Promise<JobStatus> {
   const db = database();
   const { rows } = await db.query<ReadingJob & { regeneration: boolean }>("SELECT id,document_id,voice_id,speed,model,status,run_id,request_hash LIKE 'regenerate:%' AS regeneration FROM jobs WHERE owner=$1 AND id=$2", [owner, id]);
   if (!rows[0]) throw new AppError("找不到这个任务", 404, "JOB_NOT_FOUND");
@@ -204,13 +207,15 @@ async function attach(db: Database, owner: string, job: ReadingJob, segmentId: s
 export type Generation = { attempt: string; key: string; segment: Segment; voice: Voice; job: ReadingJob; owner: string };
 export async function claimNext(jobId: string, owner: string): Promise<Generation | "busy" | "done"> {
   return database().transaction(async (db) => {
+    // Resolve the persisted owner/job pair before any locks or recovery writes.
+    // An invalid workflow argument must not create a tenant or affect its jobs.
+    const { rows } = await db.query<ReadingJob>("SELECT * FROM jobs WHERE owner=$1 AND id=$2", [owner, jobId]);
+    if (!rows[0]) return "done";
     await ownerLock(db, owner);
     // A crashed step may already have been billed. Quarantine it, never resend.
     await db.query(`UPDATE job_items i SET status='uncertain',error='生成结果不确定；请确认可能重复计费后重试'
       FROM generation_claims c WHERE i.owner=c.owner AND i.job_id=c.job_id AND i.segment_id=c.segment_id
       AND i.attempt=c.attempt AND i.status='working' AND c.owner=$1 AND c.expires_at<now()`, [owner]);
-    const { rows } = await db.query<ReadingJob>("SELECT * FROM jobs WHERE owner=$1 AND id=$2", [owner, jobId]);
-    if (!rows[0]) return "done";
     const job = rows[0];
     if (["indextts", "replicate"].includes(job.synthesis?.provider || "")) {
       const resumed = await db.query<{ segment_id: string; key: string; attempt: string }>(`UPDATE generation_claims c SET poll_after=now()+interval '40 seconds'

@@ -4,11 +4,12 @@ import { IndexTtsProvider } from "@/lib/providers/indextts";
 import { ReplicateProvider } from "@/lib/providers/replicate";
 import { getVoiceProvider } from "@/lib/providers";
 import { putAudio } from "@/lib/blob";
-import { ownerSubject, validateResourceIdentity } from "@/lib/config";
+import { validateResourceIdentity } from "@/lib/config";
 
 export async function generateNext(jobId: string, owner: string): Promise<"busy" | "done" | "progress"> {
   "use step";
-  if (owner !== ownerSubject()) return "done";
+  // Only the authenticated Workflow runtime invokes this step. claimNext
+  // verifies the persisted owner/job pair; resource isolation still fails closed.
   await validateResourceIdentity();
   const claim = await claimNext(jobId, owner);
   if (typeof claim === "string") return claim;

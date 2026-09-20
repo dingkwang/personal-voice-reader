@@ -7,16 +7,17 @@ import { AppError } from "./errors";
 import { addVoice, findVoice } from "./store";
 import { boundedBytes, normalizeReference } from "./providers/indextts";
 import { providerReady } from "./tts-config";
+import { replicateReference } from "./replicate-reference";
 import type { Voice } from "./types";
 
 export const referenceVoiceSchema = z.object({
-  provider: z.literal("indextts"), name: z.string().trim().min(1).max(60),
+  provider: z.enum(["indextts", "replicate"]), name: z.string().trim().min(1).max(60),
   language: z.enum(["zh", "en", "ja", "es", "ar"]).default("zh"), consent: z.literal(true),
   uploadIds: z.array(z.string().uuid()).length(1), idempotencyKey: z.string().uuid(),
   makeDefault: z.boolean().default(true),
 });
 export async function registerReferenceVoice(input: z.infer<typeof referenceVoiceSchema>, owner: string) {
-  providerReady("indextts");
+  providerReady(input.provider);
   const db = database();
   const hash = sha256(JSON.stringify(input));
   const prior = await db.query<{ request_hash: string; voice_id: string }>("SELECT request_hash,voice_id FROM clone_requests WHERE owner=$1 AND id=$2", [owner, input.idempotencyKey]);
@@ -32,9 +33,9 @@ export async function registerReferenceVoice(input: z.infer<typeof referenceVoic
   if (meta.size !== upload.size || meta.contentType !== upload.content_type) throw new AppError("录音大小或类型不符", 422);
   const source = await get(upload.pathname, { access: "private" });
   if (!source?.stream) throw new AppError("录音尚未上传完成", 422);
-  const raw = await boundedBytes(new Response(source.stream), 20 * 1024 * 1024);
+  const raw = await boundedBytes(new Response(source.stream), input.provider === "replicate" ? 960_044 : 20 * 1024 * 1024);
   if (raw.length !== upload.size) throw new AppError("录音大小不符", 422);
-  const normalized = await normalizeReference(raw);
+  const normalized = input.provider === "replicate" ? replicateReference(raw) : await normalizeReference(raw);
   const pathname = `references/${ownerPrefix(owner)}/${normalized.hash}.wav`;
   try { await put(pathname, normalized.bytes, { access: "private", addRandomSuffix: false, allowOverwrite: false, contentType: "audio/wav" }); }
   catch (error) {
@@ -50,7 +51,7 @@ export async function registerReferenceVoice(input: z.infer<typeof referenceVoic
     }
     const claimed = await tx.query("UPDATE uploads SET used=true WHERE owner=$1 AND id=$2 AND NOT used AND expires_at>now() RETURNING id", [owner, input.uploadIds[0]]);
     if (!claimed.rows.length) throw new AppError("录音已使用或过期", 409);
-    const voice: Voice = { id: `voice_${randomUUID()}`, name: input.name, provider: "indextts", providerVoiceId: normalized.hash,
+    const voice: Voice = { id: `voice_${randomUUID()}`, name: input.name, provider: input.provider, providerVoiceId: normalized.hash,
       language: input.language, createdAt: new Date().toISOString(), source: "cloned",
       reference: { pathname, hash: normalized.hash, size: normalized.bytes.length, seconds: normalized.seconds } };
     await addVoice(voice, owner, tx);

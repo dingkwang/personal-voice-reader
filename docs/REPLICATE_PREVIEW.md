@@ -1,6 +1,9 @@
 # Replicate IndexTTS 2 preview
 
-The web default is the owner's preconfigured reference voice. It uses Replicate
+The original owner's web default remains their preconfigured reference voice.
+Other users start empty and upload their own voice. This multi-user implementation
+is local, not a verified deployment. See [web access](MULTI_USER_WEB.md).
+Replicate uses
 `lucataco/indextts-2`, pinned to
 `b219b0f22f95fd97cb2c8e3bbea6827a450a7fff05674c996d83171d70b3f685`.
 This is IndexTTS 2, not 2.5. Modal is not required or deployed.
@@ -26,11 +29,9 @@ recording to perform inference; its own retention rules apply.
 Creation is reserved in PostgreSQL before the paid POST. Its returned prediction
 ID is persisted. Poll failures retry that ID. A lost creation reply is uncertain
 and never automatically resubmitted. Owner claims expire after 30 minutes.
-Each prediction has a five-minute provider cancellation deadline. Preview permits
-100 lifetime submitted attempts per owner. This is a Preview guard, not a
-production quota. Enqueue and retry preflight include outstanding queued
-reservations. See [audio regeneration](audio-regeneration.md) for explicit
-regeneration, billing confirmation, version preservation, and request recovery.
+Each prediction has a five-minute provider cancellation deadline.
+See [audio regeneration](audio-regeneration.md) for explicit regeneration,
+billing confirmation, version preservation, and request recovery.
 Keep total live testing below $5, including direct smoke calls.
 
 Output is downloaded immediately into private Blob. WAV and MP3 retain the correct
@@ -38,9 +39,29 @@ extension and MIME. Range requests support seeking. Cache keys include provider,
 model version, reference checksum, text and settings. Existing Fish audio remains
 playable. MCP keeps its existing Fish default.
 
-The supplied voice is configured by the seed script. General Replicate voice
-upload/recording UI and emotion controls are deferred. The Add Voice dialog retains
-the existing Fish and separately configured Modal options.
+The supplied original voice was configured by the seed script. New users use the
+Add Voice dialog to upload or record a 10–20 second reference. It is normalized
+in-browser and validated server-side, with no paid synthesis on save. Emotion
+controls remain deferred. Fish and separately configured Modal options remain.
+
+## Daily quota
+
+The user approved **1000 Replicate attempts per user per calendar day** in
+`America/Los_Angeles`, replacing the lifetime 100-attempt guard.
+The quota resets at local midnight, including 23-hour and 25-hour DST days.
+Both preflight and paid submission enforce it under the owner lock.
+
+Usage counts `replicate_requests.created_at` from local midnight (inclusive)
+to the next local midnight (exclusive). Each row is durably reserved just before
+the paid POST. All statuses count, including failed, submitting, and uncertain
+attempts. A crash after reservation still consumes a slot for safety.
+Polling and cache hits do not start new attempts. No schema change is needed.
+
+Enqueue, regeneration, and explicit retry also reserve distinct uncached queued
+or working keys without a submitted attempt, even when queued on a previous day.
+Previously submitted attempts are not new reservations after midnight.
+Reset does not clear uncertain calls, release owner claims, or resubmit anything.
+Submission rechecks the current day; preflight does not guarantee a future slot.
 
 ## Verification
 

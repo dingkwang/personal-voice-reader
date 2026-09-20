@@ -3,6 +3,7 @@ import { requireOwner } from "@/lib/auth";
 import { findDocument } from "@/lib/store";
 import { toPublicDocument } from "@/lib/types";
 import { latestJob } from "@/lib/jobs";
+import { ownerSubject } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -16,7 +17,8 @@ export async function GET(
     const doc = await findDocument(id, owner);
     const publicDoc = toPublicDocument(doc);
     return Response.json(
-      { document: { ...publicDoc, originalText: doc.originalText }, job: await latestJob(id, owner) },
+      { document: { ...publicDoc, originalText: doc.originalText }, job: await latestJob(id, owner),
+        allowLegacyRecovery: owner === ownerSubject() },
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

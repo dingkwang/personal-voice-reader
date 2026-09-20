@@ -43,7 +43,7 @@ The server returns `202` with the durable task's ordered progress.
 It returns `409` for stale settings, unfinished/uncertain tasks, or conflicting
 idempotency keys. Missing owner-scoped documents/segments return `404`.
 Invalid scope or billing acknowledgement returns `422`.
-Insufficient Preview capacity returns `422` with `QUOTA_EXCEEDED`, before commit.
+Insufficient daily capacity returns `422` with `QUOTA_EXCEEDED`, before commit.
 
 ## Safety and storage
 
@@ -55,9 +55,10 @@ Insufficient Preview capacity returns `422` with `QUOTA_EXCEEDED`, before commit
   No migration is required.
 - Owner locking serializes source checks, idempotency, quota reservations,
   ordinary enqueue, retries, and provider claims.
-- Quota preflight includes used Replicate attempts and distinct uncached queued
-  or claimed keys without a submitted attempt. The existing 100-attempt cap,
-  two provider slots, and cancellation/uncertainty deadlines are unchanged.
+- Quota preflight includes today's Replicate attempts and distinct uncached queued
+  or claimed keys without a submitted attempt. The cap is 1000 per owner per
+  `America/Los_Angeles` calendar day. See [daily quota](REPLICATE_PREVIEW.md#daily-quota).
+  The two provider slots and cancellation/uncertainty deadlines are unchanged.
 - Old version mappings, cache entries, and audio objects are not deleted.
   Only the still-selected task can update the segment's playable version.
   Explicit retries can resolve superseded tasks but cannot reselect them over

@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/browser",
+  testIgnore: ["reader-start.spec.ts", "login-failure.spec.ts"], // UI-only fixtures use playwright.reader.config.ts.
   workers: 1,
   timeout: 90_000,
   reporter: [["list"], ["json", { outputFile: ".evidence/browser/results.json" }]],

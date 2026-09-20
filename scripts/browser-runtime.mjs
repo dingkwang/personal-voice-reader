@@ -7,6 +7,16 @@ const indexRequests = new Map();
 const submissionsByText = new Map();
 const failedPredictions = new Set();
 const mp3 = await readFile(process.env.BROWSER_TEST_AUDIO);
+// Canonical 12-second silent PCM for the new-user upload path only.
+const reference = Buffer.alloc(44 + 24_000 * 12 * 2);
+reference.write("RIFF", 0); reference.writeUInt32LE(reference.length - 8, 4);
+reference.write("WAVEfmt ", 8); reference.writeUInt32LE(16, 16);
+reference.writeUInt16LE(1, 20); reference.writeUInt16LE(1, 22);
+reference.writeUInt32LE(24_000, 24); reference.writeUInt32LE(48_000, 28);
+reference.writeUInt16LE(2, 32); reference.writeUInt16LE(16, 34);
+reference.write("data", 36); reference.writeUInt32LE(reference.length - 44, 40);
+const { createHash } = await import("node:crypto");
+const referenceHash = createHash("sha256").update(reference).digest("hex");
 const network = new MockAgent();
 network.disableNetConnect();
 network.enableNetConnect(/^(127\.0\.0\.1|localhost)(:\d+)?$/);
@@ -18,7 +28,17 @@ network.get("https://vercel.com").intercept({ path: /\/api\/blob.*/, method: "PU
     contentType: "audio/mpeg", contentDisposition: "attachment", etag: '"synthetic"' }),
   responseOptions: { headers: { "Content-Type": "application/json" } } };
 }).persist();
+network.get("https://vercel.com").intercept({ path: /\/api\/blob.*/, method: "GET" }).reply((options) => {
+  const pathname = new URL(options.path, "https://vercel.com").searchParams.get("url");
+  if (!pathname?.startsWith("uploads/")) throw new Error("Unexpected metadata request");
+  return { statusCode: 200, data: JSON.stringify({ pathname, size: reference.length, contentType: "audio/wav",
+    url: `https://synthetic.private.blob.vercel-storage.com/${pathname}`, uploadedAt: new Date().toISOString() }),
+    responseOptions: { headers: { "Content-Type": "application/json" } } };
+}).persist();
 network.get("https://synthetic.private.blob.vercel-storage.com").intercept({ path: /.*/, method: "GET" }).reply((options) => {
+  if (options.path.startsWith("/uploads/") || options.path.includes(referenceHash)) {
+    return { statusCode: 200, data: reference, responseOptions: { headers: { "Content-Type": "audio/wav", "Content-Length": String(reference.length) } } };
+  }
   if (options.path.startsWith("/references/")) {
     const data = Buffer.from("RIFF0000WAVEsynthetic-reference");
     return { statusCode: 200, data, responseOptions: { headers: { "Content-Type": "audio/wav", "Content-Length": String(data.length) } } };

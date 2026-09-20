@@ -20,14 +20,14 @@ beforeEach(async () => {
 afterEach(async () => { await fixture.close(); vi.unstubAllEnvs(); });
 const input = (key: string, text = "这是纯合成测试文本。") => ({ text, title: "Synthetic", speed: 1, idempotency_key: key });
 it("atomically deduplicates concurrent calls and rejects changed payload", async () => {
-  const results = await Promise.all(Array.from({ length: 8 }, () => createReading(input("request-same"))));
+  const results = await Promise.all(Array.from({ length: 8 }, () => createReading(input("request-same"), TEST_OWNER)));
   expect(new Set(results.map((r) => r.jobId)).size).toBe(1);
   expect((await fixture.db.query("SELECT * FROM documents")).rows).toHaveLength(1);
-  await expect(createReading(input("request-same", "不同文字"))).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+  await expect(createReading(input("request-same", "不同文字"), TEST_OWNER)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
   expect(mocks.synthesize).not.toHaveBeenCalled();
 });
 it("persistently limits owner to two claims across jobs and releases on completion", async () => {
-  const jobs = await Promise.all([0, 1, 2].map((i) => createReading(input(`request-${i}`, `第${i}段测试`))));
+  const jobs = await Promise.all([0, 1, 2].map((i) => createReading(input(`request-${i}`, `第${i}段测试`), TEST_OWNER)));
   const claims = await Promise.all(jobs.map((job) => claimNext(job.jobId, TEST_OWNER)));
   expect(claims.filter((c) => typeof c !== "string")).toHaveLength(2);
   expect(claims).toContain("busy");
@@ -38,20 +38,20 @@ it("persistently limits owner to two claims across jobs and releases on completi
   expect(await claimNext(blocked.jobId, TEST_OWNER)).not.toBe("busy");
 });
 it("reuses completed cache in another session and retains model/key dimensions", async () => {
-  const first = await createReading(input("request-first"));
+  const first = await createReading(input("request-first"), TEST_OWNER);
   await generateNext(first.jobId, TEST_OWNER);
-  const second = await createReading(input("request-second"));
+  const second = await createReading(input("request-second"), TEST_OWNER);
   expect(await generateNext(second.jobId, TEST_OWNER)).toBe("done");
   expect(mocks.synthesize).toHaveBeenCalledTimes(1);
-  expect((await readingStatus(second.jobId)).status).toBe("completed");
-  expect((await findDocument(second.documentId)).segments[0].audioUrl).toContain("?v=");
-  const third = await createReading({ ...input("request-third"), speed: 1.2 });
+  expect((await readingStatus(second.jobId, TEST_OWNER)).status).toBe("completed");
+  expect((await findDocument(second.documentId, TEST_OWNER)).segments[0].audioUrl).toContain("?v=");
+  const third = await createReading({ ...input("request-third"), speed: 1.2 }, TEST_OWNER);
   await generateNext(third.jobId, TEST_OWNER);
   expect(mocks.synthesize).toHaveBeenCalledTimes(2);
 });
 it("deduplicates identical in-flight cache keys across documents", async () => {
-  const a = await createReading(input("request-cache-a"));
-  const b = await createReading(input("request-cache-b"));
+  const a = await createReading(input("request-cache-a"), TEST_OWNER);
+  const b = await createReading(input("request-cache-b"), TEST_OWNER);
   const c = await claimNext(a.jobId, TEST_OWNER);
   expect(await claimNext(b.jobId, TEST_OWNER)).toBe("busy");
   if (typeof c === "string") throw new Error("Missing claim");
@@ -59,10 +59,10 @@ it("deduplicates identical in-flight cache keys across documents", async () => {
   expect(await claimNext(b.jobId, TEST_OWNER)).toBe("done");
 });
 it("quarantines uncertain provider calls, keeps slots, requires delayed explicit billing acknowledgement", async () => {
-  const job = await createReading(input("request-uncertain"));
+  const job = await createReading(input("request-uncertain"), TEST_OWNER);
   mocks.synthesize.mockRejectedValueOnce(new Error("private provider error"));
   await generateNext(job.jobId, TEST_OWNER);
-  const status = await readingStatus(job.jobId);
+  const status = await readingStatus(job.jobId, TEST_OWNER);
   expect(status.status).toBe("attention");
   expect(status.items[0].status).toBe("uncertain");
   expect(JSON.stringify(status)).not.toContain("private provider error");
@@ -77,50 +77,50 @@ it("quarantines uncertain provider calls, keeps slots, requires delayed explicit
   expect(mocks.synthesize).toHaveBeenCalledTimes(2);
 });
 it("recovers interrupted claims without automatically reissuing paid synthesis", async () => {
-  const job = await createReading(input("request-crash"));
+  const job = await createReading(input("request-crash"), TEST_OWNER);
   await claimNext(job.jobId, TEST_OWNER);
   await fixture.db.query("UPDATE generation_claims SET expires_at=now()-interval '1 minute'");
   expect(await generateNext(job.jobId, TEST_OWNER)).toBe("done");
-  expect((await readingStatus(job.jobId)).status).toBe("attention");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).status).toBe("attention");
   expect(mocks.synthesize).not.toHaveBeenCalled();
 });
 it("isolates job and document access by owner", async () => {
-  const job = await createReading(input("request-owner"));
+  const job = await createReading(input("request-owner"), TEST_OWNER);
   await expect(readingStatus(job.jobId, "auth0|other")).rejects.toMatchObject({ status: 404 });
   await expect(findDocument(job.documentId, "auth0|other")).rejects.toMatchObject({ status: 404 });
 });
 it("late completion cannot overwrite settings from a newer job", async () => {
-  const original = await createReading(input("request-old"));
+  const original = await createReading(input("request-old"), TEST_OWNER);
   const old = await claimNext(original.jobId, TEST_OWNER);
   const { queueDocument } = await import("./jobs");
-  const newer = await queueDocument({ documentId: original.documentId, voiceId: "voice_test", speed: 1.3, idempotencyKey: "request-new" });
+  const newer = await queueDocument({ documentId: original.documentId, voiceId: "voice_test", speed: 1.3, idempotencyKey: "request-new" }, TEST_OWNER);
   await generateNext(newer.jobId, TEST_OWNER);
   if (typeof old === "string") throw new Error("Missing old claim");
   await completeGeneration(old, { objectHash: sha256("old"), pathname: "audio/old", size: 3 });
-  expect((await findDocument(original.documentId)).segments[0].speed).toBe(1.3);
+  expect((await findDocument(original.documentId, TEST_OWNER)).segments[0].speed).toBe(1.3);
   expect((await fixture.db.query("SELECT * FROM audio_versions")).rows).toHaveLength(2);
 });
 it("marks explicit uncertain attempts without returning provider payload", async () => {
-  const job = await createReading(input("request-manual"));
+  const job = await createReading(input("request-manual"), TEST_OWNER);
   const claim = await claimNext(job.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
   await uncertainGeneration(claim);
-  expect((await readingStatus(job.jobId)).items[0].error).toContain("可能已计费");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).items[0].error).toContain("可能已计费");
 });
 it("does not quarantine a committed completion after a lost commit acknowledgement", async () => {
-  const job = await createReading(input("request-commit"));
+  const job = await createReading(input("request-commit"), TEST_OWNER);
   const claim = await claimNext(job.jobId, TEST_OWNER);
   if (typeof claim === "string") throw new Error("Missing claim");
   await completeGeneration(claim, { objectHash: sha256("audio"), pathname: "audio/test", size: 5 });
   await uncertainGeneration(claim);
-  expect((await readingStatus(job.jobId)).status).toBe("completed");
+  expect((await readingStatus(job.jobId, TEST_OWNER)).status).toBe("completed");
 });
 it("persists coalesced web request keys after the shared task completes", async () => {
-  const first = await createReading(input("request-coalesce"));
+  const first = await createReading(input("request-coalesce"), TEST_OWNER);
   const { queueDocument } = await import("./jobs");
   const secondInput = { documentId: first.documentId, voiceId: "voice_test", speed: 1, idempotencyKey: "request-alias" };
-  expect((await queueDocument(secondInput)).jobId).toBe(first.jobId);
+  expect((await queueDocument(secondInput, TEST_OWNER)).jobId).toBe(first.jobId);
   await generateNext(first.jobId, TEST_OWNER);
-  expect((await queueDocument(secondInput)).jobId).toBe(first.jobId);
+  expect((await queueDocument(secondInput, TEST_OWNER)).jobId).toBe(first.jobId);
   expect((await fixture.db.query("SELECT * FROM jobs")).rows).toHaveLength(1);
 });

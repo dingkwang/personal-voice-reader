@@ -34,8 +34,8 @@ it("requires the configured owner and authorized registered MCP client and scope
   expect(() => assertTokenClaims({ ...payload, sub: "auth0|other" })).toThrow();
   expect(() => assertTokenClaims({ ...payload, azp: "other-client" })).toThrow();
 });
-async function token(options: { exp?: string; audience?: string; issuer?: string; scope?: string } = {}) {
-  return new SignJWT({ sub: "auth0|owner", azp: "mcp-client", scope: options.scope || "read:voices" })
+async function token(options: { exp?: string; audience?: string; issuer?: string; scope?: string; sub?: string } = {}) {
+  return new SignJWT({ sub: options.sub || "auth0|owner", azp: "mcp-client", scope: options.scope || "read:voices" })
     .setProtectedHeader({ alg: "RS256", kid: "test" }).setIssuedAt()
     .setIssuer(options.issuer || "https://synthetic.auth0.com/").setAudience(options.audience || "https://synthetic.test/api/mcp")
     .setExpirationTime(options.exp || "5m").sign(key);
@@ -47,11 +47,21 @@ it("validates real signed JWT issuer, audience, expiry and scopes", async () => 
     await expect(requireOAuth(await request(options))).rejects.toMatchObject({ status: 401 });
   }
   await expect(requireOAuth(await request(), "create:readings")).rejects.toMatchObject({ status: 403 });
+  await expect(requireOAuth(await request({ sub: "google-oauth2|other" }), "read:voices")).rejects.toMatchObject({ status: 403 });
 });
 it("rejects cookie-only MCP access and bearer-only web access", async () => {
   await expect(requireOAuth(new Request("https://synthetic.test/api/mcp", { headers: { Cookie: "session=synthetic" } }))).rejects.toMatchObject({ status: 401 });
   mock.getSession.mockResolvedValue(null);
   await expect(requireOwner(new Request("https://synthetic.test/api/documents", { headers: { Authorization: `Bearer ${await token()}` } }))).rejects.toMatchObject({ status: 401 });
   mock.getSession.mockResolvedValue({ user: { sub: "auth0|other" } });
-  await expect(requireOwner()).rejects.toMatchObject({ status: 403 });
+  expect(await requireOwner()).toBe("auth0|other");
+});
+
+it.each(["auth0|owner", "google-oauth2|other"])("uses the immutable session subject: %s", async (sub) => {
+  mock.getSession.mockResolvedValue({ user: { sub, email: "same@example.test", name: "Same" } });
+  expect(await requireOwner()).toBe(sub);
+});
+it.each([undefined, "", " ", 123])("rejects missing or malformed session subjects", async (sub) => {
+  mock.getSession.mockResolvedValue({ user: { sub } });
+  await expect(requireOwner()).rejects.toMatchObject({ status: 401 });
 });

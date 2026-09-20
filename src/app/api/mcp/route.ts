@@ -6,7 +6,7 @@ import { requireOAuth, type Scope } from "@/lib/auth";
 import { appOrigin, fishApiKey } from "@/lib/config";
 import { AppError, errorResponse } from "@/lib/errors";
 import { listVoices } from "@/lib/store";
-import { createReading, createReadingSchema, readingStatus } from "@/lib/jobs";
+import { createReading, createReadingSchema, readingStatus, regenerateDocument, regenerateSchema } from "@/lib/jobs";
 import { dispatchJob } from "@/lib/dispatch";
 export const runtime = "nodejs";
 
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       }
     };
     server = new McpServer({ name: "voice-note", version: "1.0.0" }, {
-      instructions: "声笺是 Dingkang 的私人阅读器。将用户确认的最终中文文本交给 create_reading。不要读取整个聊天历史，不调用其他模型。同一次意图重试时使用相同 idempotency_key。返回播放链接；生成在后台继续。默认声音 Dingkang，语速 1。",
+      instructions: "声笺是 Dingkang 的私人阅读器。将用户确认的最终中文文本交给 create_reading。不要读取整个聊天历史，不调用其他模型。同一次意图重试时使用相同 idempotency_key。返回播放链接；生成在后台继续。默认声音 Dingkang，语速 1。重新生成会产生 provider 费用，必须先得到用户确认。",
     });
     server.registerTool("list_voices", {
       description: "列出拥有者已保存的声音，不克隆声音。",
@@ -61,6 +61,49 @@ export async function POST(request: Request) {
       return { job_id, session_id: job.document_id, status: job.status, url: job.url,
         total: job.items.length, ready: job.items.filter((i) => i.status === "ready").length,
         failed: job.items.filter((i) => ["error", "uncertain"].includes(i.status)).length };
+    }));
+    server.registerTool("regenerate_segment", {
+      description: "重新生成已保存会话中的一个段落。可能产生 provider 费用；必须明确确认并提供原任务和段落 ID。",
+      inputSchema: {
+        document_id: z.string().min(5).max(100),
+        source_job_id: z.string().min(5).max(100),
+        segment_id: z.string().min(5).max(100),
+        voice_id: z.string().min(1).max(200),
+        speed: z.number().min(0.5).max(2).default(1),
+        idempotency_key: z.string().min(8).max(200),
+        acknowledge_billing: z.literal(true),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, (input) => safe(async () => {
+      need("create:readings");
+      const payload = regenerateSchema.parse({ ...input, scope: "segment", sourceJobId: input.source_job_id,
+        segmentId: input.segment_id, voiceId: input.voice_id, idempotencyKey: input.idempotency_key,
+        acknowledgeBilling: input.acknowledge_billing });
+      const queued = await regenerateDocument(input.document_id, payload, owner);
+      after(() => dispatchJob(queued.jobId, owner));
+      const job = await readingStatus(queued.jobId, owner);
+      return { session_id: queued.documentId, job_id: queued.jobId, status: job.status, url: job.url };
+    }));
+    server.registerTool("regenerate_reading", {
+      description: "重新生成已保存会话的整篇音频。可能产生 provider 费用；必须明确确认并提供原任务 ID。",
+      inputSchema: {
+        document_id: z.string().min(5).max(100),
+        source_job_id: z.string().min(5).max(100),
+        voice_id: z.string().min(1).max(200),
+        speed: z.number().min(0.5).max(2).default(1),
+        idempotency_key: z.string().min(8).max(200),
+        acknowledge_billing: z.literal(true),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, (input) => safe(async () => {
+      need("create:readings");
+      const payload = regenerateSchema.parse({ ...input, scope: "all", sourceJobId: input.source_job_id,
+        voiceId: input.voice_id, idempotencyKey: input.idempotency_key,
+        acknowledgeBilling: input.acknowledge_billing });
+      const queued = await regenerateDocument(input.document_id, payload, owner);
+      after(() => dispatchJob(queued.jobId, owner));
+      const job = await readingStatus(queued.jobId, owner);
+      return { session_id: queued.documentId, job_id: queued.jobId, status: job.status, url: job.url };
     }));
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);

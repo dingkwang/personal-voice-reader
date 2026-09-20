@@ -1,7 +1,9 @@
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
+import { NextResponse } from "next/server";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { appOrigin, issuer, ownerSubject, required, validateResourceIdentity } from "./config";
 import { AppError } from "./errors";
+import { InvalidWebSession, loginFailureResponse, safeLoginReturnTo } from "./web-login";
 
 export type Scope = "read:voices" | "create:readings" | "read:readings";
 let client: Auth0Client | undefined;
@@ -17,8 +19,14 @@ export function auth0() {
     enableAccessTokenEndpoint: false,
     includeIdTokenHintInOIDCLogoutUrl: false,
     authorizationParameters: { scope: "openid profile" },
+    onCallback: async (error, context) => {
+      if (error) return loginFailureResponse(error);
+      return NextResponse.redirect(new URL(safeLoginReturnTo(context.returnTo), appOrigin()));
+    },
     beforeSessionSaved: async (session) => {
-      if (session.user.sub !== ownerSubject()) throw new AppError("仅限拥有者登录", 403, "FORBIDDEN");
+      // The SDK calls this AFTER onCallback. Throw to prevent session storage,
+      // rather than returning an error response from a successful callback.
+      webSubject(session.user.sub);
       return session;
     },
   });
@@ -57,11 +65,17 @@ export async function requireOAuth(request: Request, scope?: Scope) {
   return result;
 }
 export async function requireOwner(request?: Request) {
-  // Browser routes never accept OAuth tokens. The MCP boundary is separate.
+  // The resource owner is the SDK-verified tenant subject, never an email or
+  // configured fallback. Browser routes never accept MCP bearer tokens.
   if (request) assertCsrf(request);
   const session = await auth0().getSession();
   if (!session) throw new AppError("请先登录", 401, "UNAUTHORIZED");
-  if (session.user.sub !== ownerSubject()) throw new AppError("无权访问", 403, "FORBIDDEN");
+  const owner = webSubject(session.user.sub);
   await validateResourceIdentity();
-  return session.user.sub;
+  return owner;
+}
+
+function webSubject(sub: unknown): string {
+  if (typeof sub !== "string" || !sub.trim() || sub !== sub.trim()) throw new InvalidWebSession();
+  return sub;
 }

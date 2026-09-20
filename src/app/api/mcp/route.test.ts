@@ -7,6 +7,7 @@ vi.mock("next/server", () => ({ after: vi.fn() }));
 let fixture: Awaited<ReturnType<typeof testDatabase>>;
 beforeEach(async () => {
   fixture = await testDatabase();
+  vi.stubEnv("AUTH0_OWNER_SUB", TEST_OWNER);
   vi.stubEnv("DEFAULT_VOICE_ID", "voice_test");
   vi.stubEnv("APP_BASE_URL", "https://synthetic.test");
   mocks.scopes = ["read:voices", "create:readings", "read:readings"];
@@ -21,8 +22,11 @@ it("uses the Streamable HTTP SDK and exposes accurate annotations", async () => 
   const initialized = await (await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "synthetic", version: "1" } })).json();
   expect(initialized.result.serverInfo.name).toBe("voice-note");
   const body = await (await call("tools/list")).json();
-  expect(body.result.tools.map((t: { name: string }) => t.name)).toEqual(["list_voices", "create_reading", "get_reading_status"]);
+  expect(body.result.tools.map((t: { name: string }) => t.name)).toEqual([
+    "list_voices", "create_reading", "get_reading_status", "regenerate_segment", "regenerate_reading",
+  ]);
   expect(body.result.tools[1].annotations).toMatchObject({ readOnlyHint: false, idempotentHint: true });
+  expect(body.result.tools[3].inputSchema.required).toContain("acknowledge_billing");
 });
 it("creates a saved queued session, returns stable absolute URL, and deduplicates retry", async () => {
   vi.stubEnv("FISH_API_KEY", "synthetic-not-used-for-network");

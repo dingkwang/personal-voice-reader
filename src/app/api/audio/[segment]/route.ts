@@ -2,7 +2,8 @@ import { requireOwner } from "@/lib/auth";
 import { AppError, errorResponse } from "@/lib/errors";
 import { database } from "@/lib/db";
 import { findSegment } from "@/lib/store";
-import { streamAudio } from "@/lib/blob";
+import { ownerPrefix, streamAudio } from "@/lib/blob";
+import { ownerSubject } from "@/lib/config";
 export const runtime = "nodejs";
 export async function GET(request: Request, context: { params: Promise<{ segment: string }> }) {
   try {
@@ -16,9 +17,10 @@ export async function GET(request: Request, context: { params: Promise<{ segment
     const { rows } = await database().query<{ pathname: string; size: number; object_hash: string }>(
       `SELECT c.pathname,c.size,c.object_hash FROM audio_cache c
        WHERE c.owner=$1 AND c.key LIKE $2 AND
-       (c.legacy OR EXISTS(SELECT 1 FROM audio_versions v WHERE v.owner=c.owner AND v.key=c.key AND v.segment_id=$3))`,
-      [owner, `${key}%`, id]);
+       ((c.legacy AND c.owner=$4) OR EXISTS(SELECT 1 FROM audio_versions v WHERE v.owner=c.owner AND v.key=c.key AND v.segment_id=$3))`,
+      [owner, `${key}%`, id, ownerSubject()]);
     if (rows.length !== 1) throw new AppError("找不到这个版本的音频", 404, "AUDIO_VERSION_NOT_FOUND");
+    if (!rows[0].pathname.startsWith(`audio/${ownerPrefix(owner)}/`)) throw new AppError("找不到这个版本的音频", 404, "AUDIO_VERSION_NOT_FOUND");
     return await streamAudio(request, rows[0]);
   } catch (error) { return errorResponse(error); }
 }
