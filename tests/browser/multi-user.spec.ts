@@ -2,6 +2,7 @@ import { test, expect, type BrowserContext } from "@playwright/test";
 import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
 import { readFile } from "node:fs/promises";
 import { encodePcmWav } from "../../src/lib/wav";
+import { PRESET_VOICE_ID } from "../../src/lib/preset-voice";
 
 const base = "http://127.0.0.1:3108";
 async function login(context: BrowserContext, sub: string) {
@@ -25,9 +26,8 @@ for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
       await page.goto("/");
       await expect(page.locator(".history-item")).toHaveCount(0);
-      await expect(page.getByText("还没有声音。点击「添加」上传自己的录音。")).toBeVisible();
       await expect(page.locator(".private-chip")).toHaveText("我的私密会话");
-      await expect(page.locator("#voice")).toHaveValue("");
+      await expect(page.locator("#voice")).toHaveValue(PRESET_VOICE_ID);
       await page.screenshot({ path: `.evidence/browser/${width}-multi-user-empty.png`, fullPage: true });
       await page.getByRole("button", { name: "添加声音", exact: true }).click();
       await expect(page.getByRole("combobox", { name: "语音服务" })).toHaveValue("replicate");
@@ -74,9 +74,11 @@ for (const width of [1440, 390]) {
       await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 15000 });
       expect(uploadedBytes).toBe(wav.length);
       const voice = await (await context.request.get("/api/voices")).json();
-      expect(voice.voices).toHaveLength(1);
-      expect(voice.voices[0].provider).toBe("replicate");
-      expect(voice.defaultVoiceId).toBe(voice.voices[0].id);
+      expect(voice.voices).toHaveLength(2);
+      expect(voice.voices.some((v: { provider: string }) => v.provider === "replicate")).toBe(true);
+      expect(voice.voices.some((v: { id: string }) => v.id === PRESET_VOICE_ID)).toBe(true);
+      const replicateVoice = voice.voices.find((v: { provider: string }) => v.provider === "replicate");
+      expect(voice.defaultVoiceId).toBe(replicateVoice.id);
       await page.getByRole("textbox", { name: "文章标题" }).fill(`我的合成阅读 ${width}`);
       await page.getByRole("textbox", { name: "要朗读的文字" }).fill(`新账号 ${width} 的合成文章。`);
       await page.locator(".primary-read-button").click();
